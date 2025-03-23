@@ -6,20 +6,30 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { authenticateWithFirebase } from "@/lib/firebase-auth";
 import {
   Loader, Save, Download, Play, Edit, Eye, Layout, Menu,
-  FileText, Folder, RefreshCw, ChevronLeft, MoreVertical, FilePlus, FolderPlus, File,
-  X, Upload, FileUp, Trash
+  FileText, Folder, FolderOpen, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, 
+  MoreVertical, FilePlus, FolderPlus, File,
+  X, Upload, FileUp, Trash, Plus, Edit2, Trash2, Copy
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import CodeMirror from '@uiw/react-codemirror';
 import { StreamLanguage } from '@codemirror/language';
 import { stex } from '@codemirror/legacy-modes/mode/stex';
 import { EditorView } from '@codemirror/view';
-import DraggableFileTree from '@/components/DraggableFileTree';
 import { compileLatex } from "@/services/latexService";
 
 // Import components
 import EnhancedSidebar from '../components/EnhancedSidebar';
 import PdfViewer from "../components/PdfViewer";
+
+// Define types for the internal file structure
+interface FileTreeItem {
+  id: string;
+  name: string;
+  type: 'file' | 'folder';
+  parentId: string | null;
+  content?: string;
+  children?: FileTreeItem[];
+}
 
 // Editor extensions to ensure full height
 const editorSetup = EditorView.theme({
@@ -122,6 +132,12 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; itemId: string } | null>(null);
 
+  // File tree specific state
+  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
+  const [isDragging, setIsDragging] = useState<string | null>(null);
+  const [dragOverTarget, setDragOverTarget] = useState<string | null>(null);
+  const [fileContextMenu, setFileContextMenu] = useState<{x: number, y: number, fileId: string} | null>(null);
+
   // Determine if the current file is an image
   const isImageView = currentFileName && isImageFile(currentFileName);
 
@@ -140,6 +156,8 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
   const compileButtonRef = useRef<HTMLButtonElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragNode = useRef<HTMLDivElement | null>(null);
+  const dragOverNode = useRef<HTMLDivElement | null>(null);
 
   // Set up keyboard shortcuts
   useEffect(() => {
@@ -270,6 +288,41 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
     };
   }, []);
 
+  // Add custom CSS for drag and drop
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.innerHTML = `
+      .file-tree-item {
+        transition: all 0.2s ease;
+      }
+      
+      .file-tree-item.dragging {
+        opacity: 0.4;
+      }
+      
+      .file-tree-item.drag-over {
+        background-color: rgba(59, 130, 246, 0.15);
+        border: 1px dashed #60a5fa;
+      }
+      
+      .folder-item:hover .folder-actions,
+      .file-item:hover .file-actions {
+        opacity: 1;
+      }
+      
+      .folder-actions,
+      .file-actions {
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
+    `;
+    document.head.appendChild(style);
+    
+    return () => {
+      document.head.removeChild(style);
+    };
+  }, []);
+
   // Handle sidebar resize start
   const startSidebarResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -288,61 +341,114 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
     document.body.style.userSelect = 'none';
   };
 
+  // Helper function to build file tree
+  const buildFileTree = (files: any[]): FileTreeItem[] => {
+    const tree: FileTreeItem[] = [];
+    const itemMap = new Map<string, FileTreeItem>();
+    
+    // First create all items
+    files.forEach(file => {
+      // Skip deleted files
+      if (file.deleted === true) {
+        return;
+      }
+      
+      const item: FileTreeItem = {
+        id: file.id,
+        name: file._name_ || file.name || 'Untitled',
+        type: file.type || 'file',
+        parentId: file.parentId,
+        content: file.content,
+        children: file.type === 'folder' ? [] : undefined
+      };
+      itemMap.set(file.id, item);
+    });
+    
+    // Then build the tree structure
+    files.forEach(file => {
+      // Skip deleted files
+      if (file.deleted === true) {
+        return;
+      }
+      
+      const item = itemMap.get(file.id);
+      if (item) {
+        if (!file.parentId) {
+          // Root item
+          tree.push(item);
+        } else {
+          // Child item
+          const parent = itemMap.get(file.parentId);
+          if (parent && parent.children) {
+            parent.children.push(item);
+          } else if (!parent) {
+            // If parent is not found, add as root item
+            tree.push(item);
+          }
+        }
+      }
+    });
+    
+    // Sort the tree - folders first, then alphabetically
+    const sortItems = (items: FileTreeItem[]) => {
+      return items.sort((a, b) => {
+        if (a.type !== b.type) {
+          return a.type === 'folder' ? -1 : 1;
+        }
+        return a.name.localeCompare(b.name);
+      });
+    };
+    
+    const sortTree = (items: FileTreeItem[]) => {
+      sortItems(items);
+      items.forEach(item => {
+        if (item.children) {
+          sortTree(item.children);
+        }
+      });
+    };
+    
+    sortTree(tree);
+    return tree;
+  };
+
   // Refresh files list
   const refreshFiles = async () => {
     try {
+      // Use only projectId filter to avoid index issues
       const filesQuery = query(
         collection(db, "projectFiles"),
-        where("projectId", "==", projectId),
-        orderBy("_name_", "asc")
+        where("projectId", "==", projectId)
       );
 
       const filesSnapshot = await getDocs(filesQuery);
       const filesList: any[] = [];
 
       filesSnapshot.forEach((doc) => {
-        filesList.push({
-          id: doc.id,
-          ...doc.data()
-        });
+        const data = doc.data();
+        // Filter out deleted files client-side
+        if (data.deleted !== true) {
+          filesList.push({
+            id: doc.id,
+            _name_: data._name_ || data.name || "Untitled",
+            name: data._name_ || data.name || "Untitled", // For consistency
+            type: data.type || 'file',
+            projectId: data.projectId,
+            parentId: data.parentId,
+            content: data.content || '',
+            createdAt: data.createdAt,
+            lastModified: data.lastModified || data.updatedAt || serverTimestamp(),
+            ...data // Include other fields
+          });
+        }
       });
 
+      console.log(`Refreshed ${filesList.length} files`);
       setFiles(filesList);
 
-      // If no file is currently selected, try to load the appropriate file
+      // If no file is currently selected, try to select one
       if (!currentFileId) {
-        // Get project details to check for last compiled file
-        const projectRef = doc(db, "projects", projectId);
-        const projectDoc = await getDoc(projectRef);
-        const projectData = projectDoc.data();
-
-        // First priority: Check if there's a last compiled file
-        if (projectData?.lastCompiledFileId) {
-          const lastCompiledFile = filesList.find(f => f.id === projectData.lastCompiledFileId);
-          if (lastCompiledFile) {
-            setCurrentFileId(lastCompiledFile.id);
-            setCurrentFileName(lastCompiledFile._name_ || '');
-            setCode(lastCompiledFile.content || '');
-            return filesList;
-          }
-        }
-
-        // Second priority: Find main.tex
-        const mainFile = filesList.find(f => f._name_ === 'main.tex' && f.type === 'file');
-        if (mainFile) {
-          setCurrentFileId(mainFile.id);
-          setCurrentFileName(mainFile._name_);
-          setCode(mainFile.content || '');
-          return filesList;
-        }
-
-        // Third priority: Find any .tex file
-        const anyTexFile = filesList.find(f => f._name_.toLowerCase().endsWith('.tex') && f.type === 'file');
-        if (anyTexFile) {
-          setCurrentFileId(anyTexFile.id);
-          setCurrentFileName(anyTexFile._name_);
-          setCode(anyTexFile.content || '');
-        }
+        selectDefaultFile(filesList);
       }
 
       return filesList;
@@ -351,6 +457,52 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
       showNotification("Failed to load project files", "error");
       return [];
     }
+  };
+
+  // Helper to select a default file
+  const selectDefaultFile = (filesList: any[]) => {
+    // Get project details to check for last compiled file
+    const projectRef = doc(db, "projects", projectId);
+    getDoc(projectRef).then(projectDoc => {
+      if (projectDoc.exists()) {
+        const projectData = projectDoc.data();
+        
+        // First priority: Check if there's a last compiled file
+        if (projectData?.lastCompiledFileId) {
+          const lastCompiledFile = filesList.find(f => f.id === projectData.lastCompiledFileId);
+          if (lastCompiledFile) {
+            setCurrentFileId(lastCompiledFile.id);
+            setCurrentFileName(lastCompiledFile._name_ || lastCompiledFile.name || '');
+            setCode(lastCompiledFile.content || '');
+            return;
+          }
+        }
+
+        // Second priority: Find main.tex
+        const mainFile = filesList.find(f => 
+          (f._name_ === 'main.tex' || f.name === 'main.tex') && f.type === 'file'
+        );
+        if (mainFile) {
+          setCurrentFileId(mainFile.id);
+          setCurrentFileName(mainFile._name_ || mainFile.name || '');
+          setCode(mainFile.content || '');
+          return;
+        }
+
+        // Third priority: Find any .tex file
+        const anyTexFile = filesList.find(f => 
+          ((f._name_?.toLowerCase() || f.name?.toLowerCase() || '').endsWith('.tex')) && 
+          f.type === 'file'
+        );
+        if (anyTexFile) {
+          setCurrentFileId(anyTexFile.id);
+          setCurrentFileName(anyTexFile._name_ || anyTexFile.name || '');
+          setCode(anyTexFile.content || '');
+        }
+      }
+    }).catch(error => {
+      console.error("Error getting project data:", error);
+    });
   };
 
   // Handle code changes
@@ -371,23 +523,26 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
     }
 
     try {
+      console.log(`Selecting file: ${fileId}`);
+      
       // Try both collection names for consistency
       let fileData = null;
       let foundDoc = false;
 
-      // Try projectFiles first (camelCase)
+      // Try projectFiles first
       try {
         const fileRef = doc(db, "projectFiles", fileId);
         const fileDoc = await getDoc(fileRef);
         if (fileDoc.exists()) {
           fileData = fileDoc.data();
           foundDoc = true;
+          console.log(`Found file in projectFiles collection`);
         }
       } catch (err) {
         console.log("Document not found in projectFiles");
       }
 
-      // If not found, try project_files (snake_case)
+      // If not found, try project_files
       if (!foundDoc) {
         try {
           const fileRef = doc(db, "project_files", fileId);
@@ -395,6 +550,7 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
           if (fileDoc.exists()) {
             fileData = fileDoc.data();
             foundDoc = true;
+            console.log(`Found file in project_files collection`);
           }
         } catch (err) {
           console.log("Document not found in project_files");
@@ -437,6 +593,7 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
           }
         }
       } else {
+        console.error("File not found:", fileId);
         showNotification("File not found", "error");
       }
     } catch (error) {
@@ -453,6 +610,7 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
     try {
       const fileData = {
         _name_: fileName,
+        name: fileName, // For consistency
         type: 'file',
         projectId: projectId,
         parentId: parentId,
@@ -483,6 +641,7 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
     try {
       const folderData = {
         _name_: folderName,
+        name: folderName, // For consistency
         type: 'folder',
         projectId: projectId,
         parentId: parentId,
@@ -518,8 +677,12 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
         setCode('');
       }
 
-      // Delete the document
-      await deleteDoc(doc(db, "projectFiles", itemId));
+      // Mark as deleted rather than actually deleting
+      const itemRef = doc(db, "projectFiles", itemId);
+      await updateDoc(itemRef, {
+        deleted: true,
+        lastModified: serverTimestamp()
+      });
 
       await refreshFiles();
       showNotification(`Item deleted`);
@@ -527,6 +690,74 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
       console.error(`Error deleting item:`, error);
       showNotification(`Failed to delete item`, "error");
     }
+  };
+
+  // Move file or folder
+  const moveFile = async (fileId: string, newParentId: string | null) => {
+    try {
+      // Get the file being moved
+      const fileToMove = files.find(f => f.id === fileId);
+      if (!fileToMove) {
+        console.error('File not found:', fileId);
+        return;
+      }
+      
+      // Don't do anything if parent hasn't changed
+      if (fileToMove.parentId === newParentId) {
+        return;
+      }
+      
+      // Check that we're not creating a circular reference
+      if (fileToMove.type === 'folder' && newParentId !== null) {
+        // Check if newParentId is a descendant of fileId
+        const isDescendant = (parentId: string, potentialDescendantId: string): boolean => {
+          if (parentId === potentialDescendantId) return true;
+          
+          const descendants = files.filter(f => f.parentId === parentId);
+          return descendants.some(d => d.type === 'folder' && isDescendant(d.id, potentialDescendantId));
+        };
+        
+        if (isDescendant(fileId, newParentId)) {
+          showNotification('Cannot move a folder inside itself', 'error');
+          return;
+        }
+      }
+      
+      // Update the file's parent in Firestore
+      const fileRef = doc(db, "projectFiles", fileId);
+      await updateDoc(fileRef, {
+        parentId: newParentId,
+        lastModified: serverTimestamp()
+      });
+      
+      // Expand the target folder automatically
+      if (newParentId !== null) {
+        setExpandedFolders(prev => ({
+          ...prev,
+          [newParentId]: true
+        }));
+      }
+      
+      // Refresh files to show the updated structure
+      await refreshFiles();
+      
+      showNotification('File moved successfully');
+    } catch (error) {
+      console.error('Error moving file:', error);
+      showNotification('Failed to move file', 'error');
+    }
+  };
+
+  // Toggle folder expand/collapse
+  const toggleFolder = (folderId: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+    }
+    
+    setExpandedFolders(prev => ({
+      ...prev,
+      [folderId]: !prev[folderId]
+    }));
   };
 
   // Context menu handlers
@@ -554,6 +785,121 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
     };
   }, []);
 
+  // Drag and drop handlers
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, fileId: string) => {
+    e.stopPropagation();
+    // Set the data to be transferred
+    e.dataTransfer.setData('text/plain', fileId);
+    // Set drag effect
+    e.dataTransfer.effectAllowed = 'move';
+    // Set visual feedback
+    setIsDragging(fileId);
+    dragNode.current = e.currentTarget;
+    
+    // Add visual styling to dragged element
+    setTimeout(() => {
+      if (dragNode.current) {
+        dragNode.current.style.opacity = '0.4';
+      }
+    }, 0);
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>, fileId: string, isFolder: boolean) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Only allow drop on folders or top level
+    if (isFolder || fileId === 'root') {
+      e.dataTransfer.dropEffect = 'move';
+      setDragOverTarget(fileId);
+      dragOverNode.current = e.currentTarget;
+    } else {
+      e.dataTransfer.dropEffect = 'none';
+    }
+  };
+
+  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, fileId: string, isFolder: boolean) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Visual feedback for valid drop targets
+    if (isFolder || fileId === 'root') {
+      setDragOverTarget(fileId);
+      dragOverNode.current = e.currentTarget;
+      
+      // Add highlighting to drop target
+      e.currentTarget.classList.add('drag-over');
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Remove highlighting when leaving potential drop target
+    e.currentTarget.classList.remove('drag-over');
+    
+    // Only clear if we're leaving this specific target (not its children)
+    if (e.currentTarget === dragOverNode.current) {
+      setDragOverTarget(null);
+      dragOverNode.current = null;
+    }
+  };
+
+  const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    
+    // Reset drag state
+    setIsDragging(null);
+    setDragOverTarget(null);
+    
+    // Clear styles
+    if (dragNode.current) {
+      dragNode.current.style.opacity = '1';
+      dragNode.current = null;
+    }
+    
+    // Remove drag-over class from all elements
+    document.querySelectorAll('.drag-over').forEach(el => {
+      el.classList.remove('drag-over');
+    });
+  };
+
+  // Handle the actual drop
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>, targetId: string | null, isFolder: boolean) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Clear visual feedback
+    setIsDragging(null);
+    setDragOverTarget(null);
+    
+    if (dragNode.current) {
+      dragNode.current.style.opacity = '1';
+      dragNode.current = null;
+    }
+    
+    // Remove drag-over class from all elements
+    document.querySelectorAll('.drag-over').forEach(el => {
+      el.classList.remove('drag-over');
+    });
+    
+    // Get the dragged item id
+    const draggedItemId = e.dataTransfer.getData('text/plain');
+    if (!draggedItemId) return;
+    
+    // Don't do anything if dropping onto itself
+    if (draggedItemId === targetId) {
+      return;
+    }
+    
+    // Check if targetId is a valid folder (or root)
+    if (targetId === 'root' || (isFolder && targetId)) {
+      // Move the file
+      await moveFile(draggedItemId, targetId === 'root' ? null : targetId);
+    }
+  };
+
   // Handle file upload
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -577,6 +923,7 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
           // Add file to Firestore
           await addDoc(collection(db, "projectFiles"), {
             _name_: file.name,
+            name: file.name, // For consistency
             type: 'file',
             projectId: projectId,
             parentId: null,
@@ -586,29 +933,49 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
             lastModified: serverTimestamp()
           });
         }
-        // For binary files (images, etc.), upload to Storage
+        // For binary files (images, etc.)
         else {
-          // Create a reference to Storage
-          const storageRef = ref(storage, `projects/${projectId}/files/${file.name}`);
+          // For images, store as data URL
+          if (file.type.startsWith('image/')) {
+            const dataUrl = await readFileAsDataURL(file);
+            
+            await addDoc(collection(db, "projectFiles"), {
+              _name_: file.name,
+              name: file.name, // For consistency
+              type: 'file',
+              fileType: 'image',
+              projectId: projectId,
+              parentId: null,
+              ownerId: userId,
+              content: dataUrl,
+              createdAt: serverTimestamp(),
+              lastModified: serverTimestamp()
+            });
+          } else {
+            // For other files, try to store in Storage
+            // Create a reference to Storage
+            const storageRef = ref(storage, `projects/${projectId}/files/${file.name}`);
 
-          // Upload the file
-          await uploadBytes(storageRef, file);
+            // Upload the file
+            await uploadBytes(storageRef, file);
 
-          // Get the download URL
-          const downloadURL = await getDownloadURL(storageRef);
+            // Get the download URL
+            const downloadURL = await getDownloadURL(storageRef);
 
-          // Add file metadata to Firestore
-          await addDoc(collection(db, "projectFiles"), {
-            _name_: file.name,
-            type: 'file',
-            fileType: 'binary',
-            projectId: projectId,
-            parentId: null,
-            ownerId: userId,
-            downloadURL: downloadURL,
-            createdAt: serverTimestamp(),
-            lastModified: serverTimestamp()
-          });
+            // Add file metadata to Firestore
+            await addDoc(collection(db, "projectFiles"), {
+              _name_: file.name,
+              name: file.name, // For consistency
+              type: 'file',
+              fileType: 'binary',
+              projectId: projectId,
+              parentId: null,
+              ownerId: userId,
+              downloadURL: downloadURL,
+              createdAt: serverTimestamp(),
+              lastModified: serverTimestamp()
+            });
+          }
         }
       }
 
@@ -636,8 +1003,23 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
     });
   };
 
+  // Helper function to read file as data URL
+  const readFileAsDataURL = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (reader.result) {
+          resolve(reader.result as string);
+        } else {
+          reject(new Error("Failed to read file"));
+        }
+      };
+      reader.onerror = (error) => reject(error);
+      reader.readAsDataURL(file);
+    });
+  };
+
   // Save current file
-  // Updated handleSave function with better error handling and document verification
   const handleSave = async () => {
     if (!currentFileId) {
       showNotification("No file selected to save", "error");
@@ -675,6 +1057,7 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
 
         const newFileData = {
           _name_: currentFileName,
+          name: currentFileName, // For consistency
           type: 'file',
           projectId: projectId,
           parentId: null,
@@ -727,7 +1110,7 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
       }
     } catch (error) {
       console.error("Error saving document:", error);
-      showNotification(`Failed to save document: ${error.message}`, "error");
+      showNotification(`Failed to save document: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
       return false;
     }
   };
@@ -872,6 +1255,147 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
   // Toggle sidebar visibility
   const toggleSidebar = () => {
     setIsSidebarCollapsed(!isSidebarCollapsed);
+  };
+
+  // File tree rendering function
+  const renderFileTree = () => {
+    // Convert the flat file list to a tree structure
+    const treeData = buildFileTree(files);
+    
+    // Recursive function to render a tree item and its children
+    const renderTreeItem = (item: FileTreeItem, depth: number = 0) => {
+      const isExpanded = expandedFolders[item.id] || false;
+      const isFolder = item.type === 'folder';
+      const isActive = item.id === currentFileId;
+      const isDraggingThis = isDragging === item.id;
+      const isDragTarget = dragOverTarget === item.id;
+      
+      return (
+        <div key={item.id} style={{ marginLeft: `${depth * 16}px` }}>
+          <div 
+            className={`file-tree-item ${isFolder ? 'folder-item' : 'file-item'} flex items-center py-1.5 px-2 my-0.5 rounded cursor-pointer hover:bg-gray-700 transition-colors group ${
+              isActive ? 'bg-gray-700 text-white' : 'text-gray-300'
+            } ${isDraggingThis ? 'dragging' : ''} ${isDragTarget ? 'drag-over' : ''}`}
+            onClick={isFolder ? () => toggleFolder(item.id) : () => handleFileSelect(item.id)}
+            draggable
+            onDragStart={(e) => handleDragStart(e, item.id)}
+            onDragOver={(e) => handleDragOver(e, item.id, isFolder)}
+            onDragEnter={(e) => handleDragEnter(e, item.id, isFolder)}
+            onDragLeave={handleDragLeave}
+            onDragEnd={handleDragEnd}
+            onDrop={(e) => handleDrop(e, item.id, isFolder)}
+            onContextMenu={(e) => handleContextMenu(e, item.id)}
+          >
+            {/* Folder icon or chevron */}
+            {isFolder ? (
+              <span onClick={(e) => { e.stopPropagation(); toggleFolder(item.id); }}>
+                {isExpanded ? (
+                  <ChevronDown className="h-3.5 w-3.5 text-gray-400 mr-1.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5 text-gray-400 mr-1.5" />
+                )}
+              </span>
+            ) : (
+              <div className="w-3.5 mr-1.5"></div>
+            )}
+            
+            {/* Item icon */}
+            {isFolder ? (
+              isExpanded ? (
+                <FolderOpen className="h-4 w-4 mr-2 text-blue-400" />
+              ) : (
+                <Folder className="h-4 w-4 mr-2 text-blue-400" />
+              )
+            ) : (
+              getFileIcon(item.name)
+            )}
+            
+            {/* Item name */}
+            <span className="ml-1 text-sm truncate flex-1">
+              {item.name}
+            </span>
+            
+            {/* Actions */}
+            <div className={`${isFolder ? 'folder-actions' : 'file-actions'} ml-auto opacity-0 group-hover:opacity-100 flex items-center space-x-1`}>
+              {isFolder && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleCreateFile(item.id);
+                  }}
+                  className="p-1 hover:bg-gray-600 rounded"
+                  title="Add File"
+                >
+                  <Plus className="h-3.5 w-3.5 text-gray-400" />
+                </button>
+              )}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleContextMenu(e, item.id);
+                }}
+                className="p-1 hover:bg-gray-600 rounded"
+              >
+                <MoreVertical className="h-3.5 w-3.5 text-gray-400" />
+              </button>
+            </div>
+          </div>
+          
+          {/* Render children if folder is expanded */}
+          {isFolder && isExpanded && item.children && item.children.length > 0 && (
+            <div className="ml-2">
+              {item.children.map(child => renderTreeItem(child, depth + 1))}
+            </div>
+          )}
+          
+          {/* Show empty folder message */}
+          {isFolder && isExpanded && (!item.children || item.children.length === 0) && (
+            <div className="pl-8 py-1 text-gray-500 text-xs italic ml-4">
+              Empty folder
+            </div>
+          )}
+        </div>
+      );
+    };
+    
+    return (
+      <div 
+        className="h-full overflow-auto px-2 py-2"
+        onDragOver={(e) => handleDragOver(e, 'root', true)}
+        onDragEnter={(e) => handleDragEnter(e, 'root', true)}
+        onDragLeave={handleDragLeave}
+        onDrop={(e) => handleDrop(e, 'root', true)}
+      >
+        {files.length === 0 ? (
+          <div className="text-center py-6">
+            <p className="text-gray-400 mb-2">No files yet</p>
+            <p className="text-gray-500 text-sm">
+              Drag files here or create a new file
+            </p>
+          </div>
+        ) : (
+          treeData.map(item => renderTreeItem(item))
+        )}
+      </div>
+    );
+  };
+
+  // Helper to get the appropriate file icon
+  const getFileIcon = (filename: string) => {
+    if (!filename) return <FileText className="h-4 w-4 text-gray-400" />;
+    
+    const extension = filename.split('.').pop()?.toLowerCase();
+    
+    if (extension === 'tex' || extension === 'latex') 
+      return <FileText className="h-4 w-4 text-amber-400" />;
+    if (isImageFile(filename)) 
+      return <FileText className="h-4 w-4 text-purple-400" />;
+    if (extension === 'pdf') 
+      return <FileText className="h-4 w-4 text-red-400" />;
+    if (['bib', 'cls', 'sty'].includes(extension || '')) 
+      return <FileText className="h-4 w-4 text-green-400" />;
+    
+    return <FileText className="h-4 w-4 text-gray-400" />;
   };
 
   // Render loading state
@@ -1085,16 +1609,9 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
               </div>
             </div>
 
-            {/* Draggable file tree */}
+            {/* File tree */}
             <div className="flex-1 overflow-hidden">
-              <DraggableFileTree
-                files={files}
-                activeFileId={currentFileId}
-                projectId={projectId}
-                userId={userId}
-                onFileSelect={handleFileSelect}
-                onRefreshFiles={refreshFiles}
-              />
+              {renderFileTree()}
             </div>
 
             {/* Resize handle */}
@@ -1371,6 +1888,7 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
           }}
           className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 py-1 min-w-[160px]"
         >
+          {/* Context menu items */}
           <button
             onClick={() => {
               const item = files.find(f => f.id === contextMenu.itemId);
@@ -1381,9 +1899,23 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
             }}
             className="w-full text-left px-3 py-1.5 text-sm flex items-center hover:bg-gray-700/80 text-gray-300"
           >
-            <File className="h-4 w-4 mr-3 text-gray-500" />
+            <FileText className="h-4 w-4 mr-3 text-gray-500" />
             Open
           </button>
+
+          {/* Folder-specific actions */}
+          {files.find(f => f.id === contextMenu.itemId)?.type === 'folder' && (
+            <button
+              onClick={() => {
+                handleCreateFile(contextMenu.itemId);
+                setContextMenu(null);
+              }}
+              className="w-full text-left px-3 py-1.5 text-sm flex items-center hover:bg-gray-700/80 text-gray-300"
+            >
+              <FilePlus className="h-4 w-4 mr-3 text-gray-500" />
+              New File
+            </button>
+          )}
 
           <button
             onClick={() => {

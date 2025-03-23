@@ -2,8 +2,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useDrag, useDrop, DndProvider } from 'react-dnd';
 import { HTML5Backend, NativeTypes } from 'react-dnd-html5-backend';
-import { 
-  File, Folder, ChevronRight, ChevronDown, 
+import {
+  File, Folder, ChevronRight, ChevronDown,
   MoreVertical, Edit, Trash, Upload
 } from 'lucide-react';
 import { doc, updateDoc, serverTimestamp, addDoc, collection, getDoc } from 'firebase/firestore';
@@ -36,6 +36,7 @@ interface DraggableFileTreeProps {
   userId: string;
   onFileSelect: (fileId: string) => void;
   onRefreshFiles: () => Promise<any>;
+  onAfterMove?: (sourceId: string, targetId: string | null) => void; // New optional callback
 }
 
 // Utility to determine if a file is an image
@@ -78,6 +79,7 @@ const readFileAsDataURL = (file: File): Promise<string> => {
   });
 };
 
+
 // DndProvider Wrapper Component - This ensures the DndProvider context is available
 const FileTreeWithDnD: React.FC<DraggableFileTreeProps> = (props) => {
   return (
@@ -111,6 +113,33 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
     setStatusMessage(message);
     setTimeout(() => setStatusMessage(null), 3000);
   };
+
+  // Add CSS for visual feedback
+  useEffect(() => {
+    // Add the CSS styles for drag and drop indicators
+    const styleElement = document.createElement('style');
+    styleElement.textContent = `
+      .drag-over {
+        background-color: rgba(59, 130, 246, 0.2) !important;
+        border: 1px dashed #60a5fa !important;
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3) !important;
+      }
+      
+      [data-item-type="folder"]:hover {
+        background-color: rgba(55, 65, 81, 0.7);
+      }
+      
+      .folder-hover {
+        background-color: rgba(59, 130, 246, 0.1) !important;
+        transition: all 0.2s ease;
+      }
+    `;
+    document.head.appendChild(styleElement);
+
+    return () => {
+      document.head.removeChild(styleElement);
+    };
+  }, []);
 
   // Close context menu when clicking outside
   useEffect(() => {
@@ -146,38 +175,91 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
     });
   };
 
-  // Move file or folder (change parent)
+  // Helper function to get all descendants of a folder
+  const getDescendants = (folderId: string): string[] => {
+    const result: string[] = [];
+
+    // Recursive function to get all descendants
+    const findDescendants = (parentId: string) => {
+      const children = files.filter(item => item.parentId === parentId);
+
+      children.forEach(child => {
+        result.push(child.id);
+        if (child.type === 'folder') {
+          findDescendants(child.id);
+        }
+      });
+    };
+
+    findDescendants(folderId);
+    return result;
+  };
+
+  // Enhanced move file or folder (change parent) with circular reference check
   const handleMoveItem = async (sourceId: string, targetId: string | null) => {
     try {
       console.log(`Moving item ${sourceId} to ${targetId || 'root'}`);
-      
+
+      // Get source item details
+      const sourceItem = files.find(f => f.id === sourceId);
+      if (!sourceItem) {
+        console.error("Source item not found:", sourceId);
+        showStatusMessage("Error: Source item not found");
+        return false; // Return false to indicate failure
+      }
+
+      // Don't do anything if item already has this parent
+      if (sourceItem.parentId === targetId) {
+        console.log("Item already has this parent, no change needed");
+        return true; // Return true but no action needed
+      }
+
+      // If moving a folder, verify we're not creating a circular reference
+      if (sourceItem.type === 'folder' && targetId) {
+        const descendants = getDescendants(sourceId);
+        if (descendants.includes(targetId)) {
+          console.error("Cannot move a folder into its own subfolder");
+          showStatusMessage("Cannot move a folder into its own subfolder");
+          return false;
+        }
+      }
+
       // Update the item's parentId
       const itemRef = doc(db, "projectFiles", sourceId);
       await updateDoc(itemRef, {
         parentId: targetId,
         lastModified: serverTimestamp()
       });
-      
+
       // Refresh files list
       await onRefreshFiles();
-      showStatusMessage(`Item moved successfully`);
+
+      // Call the optional callback if provided
+      if (onAfterMove) {
+        onAfterMove(sourceId, targetId);
+      }
+
+      showStatusMessage(`${sourceItem.type === 'file' ? 'File' : 'Folder'} moved successfully`);
+      return true; // Return true to indicate success
     } catch (error) {
       console.error("Error moving item:", error);
       showStatusMessage(`Error moving item: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return false; // Return false to indicate failure
     }
   };
+
 
   // Generate hierarchical file structure
   const buildFileTree = () => {
     const tree: FileItem[] = [];
     const itemMap = new Map<string, FileItem & { children?: FileItem[] }>();
-    
+
     // First, create a map of all items with empty children arrays for folders
     files.forEach(item => {
       const treeItem = { ...item, children: item.type === 'folder' ? [] : undefined };
       itemMap.set(item.id, treeItem);
     });
-    
+
     // Then, build the tree by assigning children to their parents
     files.forEach(item => {
       if (item.parentId) {
@@ -193,7 +275,7 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
         }
       }
     });
-    
+
     // Sort items: folders first, then alphabetically by name
     const sortItems = (items: FileItem[]) => {
       return items.sort((a, b) => {
@@ -203,7 +285,7 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
         return a._name_.localeCompare(b._name_);
       });
     };
-    
+
     // Sort recursively
     const sortTree = (items: FileItem[]) => {
       sortItems(items);
@@ -213,7 +295,7 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
         }
       });
     };
-    
+
     sortTree(tree);
     return tree;
   };
@@ -221,13 +303,13 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
   // Handle file upload from drag and drop
   const handleFileUpload = async (files: File[], parentId: string | null = null) => {
     if (!files.length) return;
-    
+
     try {
       showStatusMessage(`Uploading ${files.length} file(s)...`);
-      
+
       for (const file of files) {
         console.log(`Uploading file: ${file.name} to parent: ${parentId || 'root'}`);
-        
+
         // For text files, read content and store directly
         if (
           file.type === 'text/plain' ||
@@ -252,7 +334,7 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
         // For images, store as data URLs 
         else if (file.type.startsWith('image/')) {
           const dataUrl = await readFileAsDataURL(file);
-          
+
           // Store directly in Firestore
           await addDoc(collection(db, "projectFiles"), {
             _name_: file.name,
@@ -269,7 +351,7 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
         // For other files (if under 1MB)
         else if (file.size < 1000000) {
           const dataUrl = await readFileAsDataURL(file);
-          
+
           await addDoc(collection(db, "projectFiles"), {
             _name_: file.name,
             type: 'file',
@@ -286,7 +368,7 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
           showStatusMessage(`File ${file.name} is too large (max 1MB)`);
         }
       }
-      
+
       // Refresh files list
       await onRefreshFiles();
       showStatusMessage(`Successfully uploaded ${files.length} file(s)`);
@@ -305,7 +387,7 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
         console.log("Drop already handled by child component");
         return;
       }
-      
+
       // Handle files from external source (user's computer)
       if (monitor.getItemType() === NativeTypes.FILE) {
         console.log("Native file drop detected on root");
@@ -315,7 +397,7 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
         }
         return;
       }
-      
+
       // Handle internal file/folder movement to root
       if ('id' in item && item.id) {
         console.log(`Moving item ${item.id} to root`);
@@ -331,17 +413,17 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
   // Context menu items
   const handleRename = async () => {
     if (!contextMenu?.item) return;
-    
+
     const newName = prompt("Enter new name:", contextMenu.item._name_);
     if (!newName || newName === contextMenu.item._name_) return;
-    
+
     try {
       const itemRef = doc(db, "projectFiles", contextMenu.item.id);
       await updateDoc(itemRef, {
         _name_: newName,
         lastModified: serverTimestamp()
       });
-      
+
       await onRefreshFiles();
       setContextMenu(null);
       showStatusMessage("Item renamed successfully");
@@ -353,18 +435,18 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
 
   const handleDelete = async () => {
     if (!contextMenu?.item) return;
-    
+
     if (!window.confirm(`Are you sure you want to delete "${contextMenu.item._name_}"?`)) {
       return;
     }
-    
+
     try {
       const itemRef = doc(db, "projectFiles", contextMenu.item.id);
       await updateDoc(itemRef, {
         deleted: true,
         lastModified: serverTimestamp()
       });
-      
+
       await onRefreshFiles();
       setContextMenu(null);
       showStatusMessage("Item deleted successfully");
@@ -374,35 +456,53 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
     }
   };
 
-  // Individual file/folder item component
-  const DraggableItem: React.FC<{ 
-    item: FileItem; 
-    depth: number; 
+  // Enhanced Individual file/folder item component
+  const DraggableItem: React.FC<{
+    item: FileItem;
+    depth: number;
     isActive: boolean;
   }> = ({ item, depth, isActive }) => {
     const isExpanded = !!expandedFolders[item.id];
-    
+    const [isDraggedOver, setIsDraggedOver] = useState(false);
+
     // Set up drag source for the item
     const [{ isDragging }, drag] = useDrag({
       type: item.type === 'folder' ? ItemTypes.FOLDER : ItemTypes.FILE,
-      item: { id: item.id, type: item.type, name: item._name_ },
+      item: () => ({ id: item.id, type: item.type, name: item._name_ }),
       collect: (monitor) => ({
         isDragging: !!monitor.isDragging()
-      })
+      }),
+      end: (item, monitor) => {
+        // Clean up any visual feedback when drag ends
+        document.querySelectorAll('.drag-over').forEach(el => {
+          el.classList.remove('drag-over');
+        });
+      }
     });
 
-    // Set up drop target (only for folders)
+    // Enhanced drop target (only for folders) with improved hover detection
     const [{ isOver, canDrop }, drop] = useDrop({
       accept: [ItemTypes.FILE, ItemTypes.FOLDER, NativeTypes.FILE],
+      hover: (draggedItem, monitor) => {
+        // Add visual feedback during hover, but only if directly over this item
+        if (item.type === 'folder' && monitor.isOver({ shallow: true })) {
+          setIsDraggedOver(true);
+        }
+      },
       drop: (droppedItem: any, monitor) => {
+        // Only process drop if this is the direct target (not if the drop event bubbled up)
+        if (!monitor.isOver({ shallow: true })) {
+          return;
+        }
+
         console.log(`Drop on ${item.type} ${item._name_}`, droppedItem);
-        
+
         // Only folders can accept drops
         if (item.type !== 'folder') {
           console.log("Cannot drop onto a file");
           return;
         }
-        
+
         // Handle native file drops
         if (monitor.getItemType() === NativeTypes.FILE) {
           console.log("Native file drop on folder");
@@ -410,106 +510,136 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
           if (fileList && fileList.length) {
             handleFileUpload(Array.from(fileList), item.id);
           }
-          return;
+          return { handled: true };
         }
-        
+
         // Cannot drop onto self
         if ('id' in droppedItem && droppedItem.id === item.id) {
           console.log("Cannot drop onto self");
-          return;
+          return { handled: false };
         }
-        
+
         // Handle internal moves
         if ('id' in droppedItem) {
           console.log(`Moving ${droppedItem.id} to ${item.id}`);
           handleMoveItem(droppedItem.id, item.id);
+
+          // Auto-expand the folder when an item is dropped into it
+          if (!expandedFolders[item.id]) {
+            setExpandedFolders(prev => ({
+              ...prev,
+              [item.id]: true
+            }));
+          }
+
+          return { handled: true };
         }
       },
       canDrop: (droppedItem, monitor) => {
         // Only folders can accept drops
         if (item.type !== 'folder') return false;
-        
+
         // For files from outside, always allow
         if (monitor.getItemType() === NativeTypes.FILE) return true;
-        
+
         // Cannot drop onto self
         if ('id' in droppedItem && droppedItem.id === item.id) return false;
-        
+
+        // Cannot drop a folder into its own descendant (prevents circular references)
+        if ('id' in droppedItem && droppedItem.type === 'folder') {
+          const descendants = getDescendants(droppedItem.id);
+          if (descendants.includes(item.id)) {
+            return false;
+          }
+        }
+
         return true;
       },
       collect: (monitor) => ({
-        isOver: !!monitor.isOver(),
+        isOver: !!monitor.isOver({ shallow: true }),
         canDrop: !!monitor.canDrop()
       })
     });
 
-    // Determine file icon based on file type
-    const getFileIcon = () => {
-      if (item.type === 'folder') {
-        return <Folder className="h-4 w-4 text-blue-400" />;
+    // Clear drag over state when no longer hovering
+    useEffect(() => {
+      if (!isOver) {
+        setIsDraggedOver(false);
       }
-      
-      const fileName = item._name_;
-      if (!fileName) return <File className="h-4 w-4 text-gray-400" />;
-      
-      const extension = fileName.split('.').pop()?.toLowerCase();
-      
-      if (extension === 'tex' || extension === 'latex') 
-        return <File className="h-4 w-4 text-amber-400" />;
-      if (isImageFile(fileName)) 
-        return <File className="h-4 w-4 text-purple-400" />;
-      if (extension === 'pdf') 
-        return <File className="h-4 w-4 text-red-400" />;
-      if (['bib', 'cls', 'sty'].includes(extension || '')) 
-        return <File className="h-4 w-4 text-green-400" />;
-      
-      return <File className="h-4 w-4 text-gray-400" />;
-    };
+    }, [isOver]);
 
-    // References and functions
-    const itemRef = useRef<HTMLDivElement>(null);
-    
-    // Set up drag and drop ref
+    // Set up drag and drop ref based on item type
     const dragDropRef = (node: HTMLDivElement | null) => {
+      // For files, set only drag ref
+      // For folders, set both drag and drop refs
       drag(node);
       if (item.type === 'folder') {
         drop(node);
       }
+      return node;
     };
 
-    // Style based on drag/drop state
+    // Determine file icon based on file type
+    const getFileIcon = () => {
+      if (item.type === 'folder') {
+        return <Folder className={`h-4 w-4 text-blue-400 ${(isOver && canDrop) ? 'text-blue-500' : ''}`} />;
+      }
+
+      const fileName = item._name_;
+      if (!fileName) return <File className="h-4 w-4 text-gray-400" />;
+
+      const extension = fileName.split('.').pop()?.toLowerCase();
+
+      if (extension === 'tex' || extension === 'latex')
+        return <File className="h-4 w-4 text-amber-400" />;
+      if (isImageFile(fileName))
+        return <File className="h-4 w-4 text-purple-400" />;
+      if (extension === 'pdf')
+        return <File className="h-4 w-4 text-red-400" />;
+      if (['bib', 'cls', 'sty'].includes(extension || ''))
+        return <File className="h-4 w-4 text-green-400" />;
+
+      return <File className="h-4 w-4 text-gray-400" />;
+    };
+
+    // Calculate item style with enhanced visual feedback
     const getItemStyle = () => {
       let style: React.CSSProperties = {
         opacity: isDragging ? 0.5 : 1,
         paddingLeft: `${depth * 16 + 8}px`
       };
-      
-      if (isOver && canDrop) {
-        style.backgroundColor = 'rgba(59, 130, 246, 0.2)';
-        style.borderWidth = '1px';
-        style.borderStyle = 'dashed';
-        style.borderColor = '#60a5fa';
-      } else if (isActive) {
-        style.backgroundColor = 'rgba(59, 130, 246, 0.5)';
-      }
-      
+
       return style;
     };
-    
+
     const handleItemClick = (e: React.MouseEvent) => {
       e.stopPropagation();
       if (item.type === 'file') {
         onFileSelect(item.id);
+      } else if (item.type === 'folder') {
+        handleToggleFolder(item.id, e);
       }
     };
+
+    // Dynamic class for drop target highlighting
+    const dropTargetClass = (isOver && canDrop) || isDraggedOver
+      ? 'bg-blue-500/20 border border-dashed border-blue-400'
+      : isActive
+        ? 'bg-blue-600/40'
+        : '';
 
     return (
       <div
         ref={dragDropRef}
-        className={`flex items-center py-1.5 px-2 my-0.5 rounded cursor-pointer hover:bg-gray-700 transition-colors duration-100 group`}
+        className={`flex items-center py-1.5 px-2 my-0.5 rounded cursor-pointer hover:bg-gray-700 transition-colors duration-100 group
+                    ${dropTargetClass}
+                    ${isDragging ? 'opacity-50' : 'opacity-100'}`}
         style={getItemStyle()}
         onClick={handleItemClick}
         onContextMenu={(e) => handleContextMenu(e, item)}
+        data-item-id={item.id}
+        data-item-type={item.type}
+        data-parent-id={item.parentId}
       >
         {/* Folder chevron or spacer */}
         {item.type === 'folder' ? (
@@ -523,15 +653,15 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
         ) : (
           <div className="w-3.5 mr-1.5"></div>
         )}
-        
+
         {/* Item icon */}
         {getFileIcon()}
-        
+
         {/* Item name */}
         <span className={`ml-2 text-sm truncate ${isActive ? 'text-white font-medium' : 'text-gray-300'}`}>
           {item._name_}
         </span>
-        
+
         {/* Context menu button */}
         <div className="ml-auto opacity-0 group-hover:opacity-100 flex items-center">
           <button
@@ -548,7 +678,7 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
     );
   };
 
-  // Render the file tree recursively
+  // Enhanced renderFileTree function with proper structure for nested folders
   const renderFileTree = (items: FileItem[], depth: number = 0) => {
     return items.map(item => (
       <React.Fragment key={item.id}>
@@ -557,13 +687,28 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
           depth={depth}
           isActive={item.id === activeFileId}
         />
-        
-        {/* Render children if folder is expanded */}
-        {item.type === 'folder' && 
-         expandedFolders[item.id] && 
-         (item as any).children && 
-         (item as any).children.length > 0 && 
-          renderFileTree((item as any).children, depth + 1)}
+
+        {/* Render children if folder is expanded - now with a wrapper div */}
+        {item.type === 'folder' &&
+          expandedFolders[item.id] &&
+          (item as any).children &&
+          (item as any).children.length > 0 && (
+            <div className="ml-2">
+              {renderFileTree((item as any).children, depth + 1)}
+            </div>
+          )}
+
+        {/* Show empty folder message if folder is expanded but has no children */}
+        {item.type === 'folder' &&
+          expandedFolders[item.id] &&
+          (!((item as any).children) || (item as any).children.length === 0) && (
+            <div
+              className="pl-8 py-1 text-gray-500 text-xs italic ml-4"
+              style={{ paddingLeft: `${(depth + 1) * 16 + 8}px` }}
+            >
+              Empty folder
+            </div>
+          )}
       </React.Fragment>
     ));
   };
@@ -579,15 +724,14 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
           {statusMessage}
         </div>
       )}
-      
-      <div 
+
+      <div
         ref={(el) => {
           rootRef.current = el;
           rootDrop(el);
         }}
-        className={`flex-1 h-full overflow-auto px-2 py-2 ${
-          isRootOver && canDropOnRoot ? 'bg-gray-800/60 border-2 border-dashed border-blue-500/50' : ''
-        }`}
+        className={`flex-1 h-full overflow-auto px-2 py-2 ${isRootOver && canDropOnRoot ? 'bg-gray-800/60 border-2 border-dashed border-blue-500/50' : ''
+          }`}
       >
         {/* Empty state message when no files */}
         {files.length === 0 && (
@@ -598,10 +742,10 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
             </p>
           </div>
         )}
-        
+
         {/* Project files tree */}
         {fileTree.length > 0 && renderFileTree(fileTree)}
-        
+
         {/* Drop files here message when dragging over */}
         {isRootOver && canDropOnRoot && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -611,16 +755,16 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
             </div>
           </div>
         )}
-        
+
         {/* Context menu */}
         {contextMenu && contextMenu.item && (
           <div
             ref={contextMenuRef}
             className="fixed bg-gray-800 border border-gray-700 rounded shadow-lg py-1 z-50"
-            style={{ 
-              left: contextMenu.x, 
+            style={{
+              left: contextMenu.x,
               top: contextMenu.y,
-              minWidth: '160px' 
+              minWidth: '160px'
             }}
           >
             <button
