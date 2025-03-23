@@ -1,4 +1,4 @@
-// components/DraggableFileTree.tsx
+// DraggableFileTree.tsx with fixed folder drag and drop
 import React, { useState, useRef, useEffect } from 'react';
 import { useDrag, useDrop, DndProvider } from 'react-dnd';
 import { HTML5Backend, NativeTypes } from 'react-dnd-html5-backend';
@@ -10,11 +10,11 @@ import { doc, updateDoc, serverTimestamp, addDoc, collection, getDoc } from 'fir
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '@/lib/firebase';
 
-// Define DnD item types
+// Define DnD item types - must be consistent!
 const ItemTypes = {
   FILE: 'file',
   FOLDER: 'folder',
-  FILE_INPUT: 'FILE'
+  NATIVE_FILE: 'FILE'
 };
 
 interface FileItem {
@@ -62,6 +62,22 @@ const readFileAsText = (file: File): Promise<string> => {
   });
 };
 
+// Helper to read file as data URL
+const readFileAsDataURL = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (reader.result) {
+        resolve(reader.result as string);
+      } else {
+        reject(new Error("Failed to read file"));
+      }
+    };
+    reader.onerror = (error) => reject(error);
+    reader.readAsDataURL(file);
+  });
+};
+
 // DndProvider Wrapper Component - This ensures the DndProvider context is available
 const FileTreeWithDnD: React.FC<DraggableFileTreeProps> = (props) => {
   return (
@@ -86,8 +102,15 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
     y: number;
     item: FileItem | null;
   } | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  // Show a temporary status message
+  const showStatusMessage = (message: string) => {
+    setStatusMessage(message);
+    setTimeout(() => setStatusMessage(null), 3000);
+  };
 
   // Close context menu when clicking outside
   useEffect(() => {
@@ -104,7 +127,8 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
   }, []);
 
   // Toggle folder expanded state
-  const handleToggleFolder = (folderId: string) => {
+  const handleToggleFolder = (folderId: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent event from bubbling up
     setExpandedFolders(prev => ({
       ...prev,
       [folderId]: !prev[folderId]
@@ -125,6 +149,8 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
   // Move file or folder (change parent)
   const handleMoveItem = async (sourceId: string, targetId: string | null) => {
     try {
+      console.log(`Moving item ${sourceId} to ${targetId || 'root'}`);
+      
       // Update the item's parentId
       const itemRef = doc(db, "projectFiles", sourceId);
       await updateDoc(itemRef, {
@@ -134,9 +160,10 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
       
       // Refresh files list
       await onRefreshFiles();
+      showStatusMessage(`Item moved successfully`);
     } catch (error) {
       console.error("Error moving item:", error);
-      // Show error notification
+      showStatusMessage(`Error moving item: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
@@ -196,8 +223,12 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
     if (!files.length) return;
     
     try {
+      showStatusMessage(`Uploading ${files.length} file(s)...`);
+      
       for (const file of files) {
-        // For text files (like .tex, .bib, etc.), read content and store directly
+        console.log(`Uploading file: ${file.name} to parent: ${parentId || 'root'}`);
+        
+        // For text files, read content and store directly
         if (
           file.type === 'text/plain' ||
           file.name.endsWith('.tex') ||
@@ -218,18 +249,27 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
             lastModified: serverTimestamp()
           });
         }
-        // For binary files (images, etc.), upload to Storage
-        else {
-          // Create a reference to Storage
-          const storageRef = ref(storage, `projects/${projectId}/files/${file.name}`);
-
-          // Upload the file
-          await uploadBytes(storageRef, file);
-
-          // Get the download URL
-          const downloadURL = await getDownloadURL(storageRef);
-
-          // Add file metadata to Firestore
+        // For images, store as data URLs 
+        else if (file.type.startsWith('image/')) {
+          const dataUrl = await readFileAsDataURL(file);
+          
+          // Store directly in Firestore
+          await addDoc(collection(db, "projectFiles"), {
+            _name_: file.name,
+            type: 'file',
+            fileType: 'image',
+            projectId: projectId,
+            parentId: parentId,
+            ownerId: userId,
+            content: dataUrl,
+            createdAt: serverTimestamp(),
+            lastModified: serverTimestamp()
+          });
+        }
+        // For other files (if under 1MB)
+        else if (file.size < 1000000) {
+          const dataUrl = await readFileAsDataURL(file);
+          
           await addDoc(collection(db, "projectFiles"), {
             _name_: file.name,
             type: 'file',
@@ -237,46 +277,56 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
             projectId: projectId,
             parentId: parentId,
             ownerId: userId,
-            downloadURL: downloadURL,
+            content: dataUrl,
             createdAt: serverTimestamp(),
             lastModified: serverTimestamp()
           });
+        } else {
+          console.error(`File too large to upload directly: ${file.name}`);
+          showStatusMessage(`File ${file.name} is too large (max 1MB)`);
         }
       }
       
       // Refresh files list
       await onRefreshFiles();
+      showStatusMessage(`Successfully uploaded ${files.length} file(s)`);
     } catch (error) {
       console.error("Error uploading files:", error);
-      // Show error notification
+      showStatusMessage(`Error uploading files: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
   // Set up drop target for the root level (and when dropping on empty areas)
-  const [{ isOver, canDrop }, drop] = useDrop(() => ({
+  const [{ isRootOver, canDropOnRoot }, rootDrop] = useDrop({
     accept: [ItemTypes.FILE, ItemTypes.FOLDER, NativeTypes.FILE],
     drop: (item: any, monitor) => {
       // Check if the drop was directly on the component and not a child component
       if (monitor.didDrop()) {
+        console.log("Drop already handled by child component");
         return;
       }
       
       // Handle files from external source (user's computer)
-      if (item.files) {
-        handleFileUpload(item.files, null);
+      if (monitor.getItemType() === NativeTypes.FILE) {
+        console.log("Native file drop detected on root");
+        const fileList = monitor.getItem().files;
+        if (fileList && fileList.length) {
+          handleFileUpload(Array.from(fileList), null);
+        }
         return;
       }
       
       // Handle internal file/folder movement to root
-      if (item.id) {
+      if ('id' in item && item.id) {
+        console.log(`Moving item ${item.id} to root`);
         handleMoveItem(item.id, null);
       }
     },
     collect: (monitor) => ({
-      isOver: !!monitor.isOver({ shallow: true }),
-      canDrop: !!monitor.canDrop()
+      isRootOver: !!monitor.isOver({ shallow: true }),
+      canDropOnRoot: !!monitor.canDrop()
     })
-  }), [files]);
+  });
 
   // Context menu items
   const handleRename = async () => {
@@ -294,9 +344,10 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
       
       await onRefreshFiles();
       setContextMenu(null);
+      showStatusMessage("Item renamed successfully");
     } catch (error) {
       console.error("Error renaming item:", error);
-      // Show error notification
+      showStatusMessage(`Error renaming item: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
@@ -316,65 +367,81 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
       
       await onRefreshFiles();
       setContextMenu(null);
+      showStatusMessage("Item deleted successfully");
     } catch (error) {
       console.error("Error deleting item:", error);
-      // Show error notification
+      showStatusMessage(`Error deleting item: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
   // Individual file/folder item component
-  const DraggableItem = ({ 
-    item, 
-    depth, 
-    isActive
-  }: { 
+  const DraggableItem: React.FC<{ 
     item: FileItem; 
     depth: number; 
     isActive: boolean;
-  }) => {
+  }> = ({ item, depth, isActive }) => {
     const isExpanded = !!expandedFolders[item.id];
     
-    // Set up drag source
-    const [{ isDragging }, drag] = useDrag(() => ({
+    // Set up drag source for the item
+    const [{ isDragging }, drag] = useDrag({
       type: item.type === 'folder' ? ItemTypes.FOLDER : ItemTypes.FILE,
-      item: { id: item.id, type: item.type },
+      item: { id: item.id, type: item.type, name: item._name_ },
       collect: (monitor) => ({
         isDragging: !!monitor.isDragging()
       })
-    }), [item.id, item.type]);
+    });
 
-    // Set up drop target for folders
-    const [{ isOver, canDrop }, folderDrop] = useDrop(() => ({
-      accept: [ItemTypes.FILE, ItemTypes.FOLDER],
-      drop: (draggedItem: any) => {
-        // Don't allow dropping on itself
-        if (draggedItem.id === item.id) return;
+    // Set up drop target (only for folders)
+    const [{ isOver, canDrop }, drop] = useDrop({
+      accept: [ItemTypes.FILE, ItemTypes.FOLDER, NativeTypes.FILE],
+      drop: (droppedItem: any, monitor) => {
+        console.log(`Drop on ${item.type} ${item._name_}`, droppedItem);
         
         // Only folders can accept drops
-        if (item.type === 'folder') {
-          handleMoveItem(draggedItem.id, item.id);
+        if (item.type !== 'folder') {
+          console.log("Cannot drop onto a file");
+          return;
+        }
+        
+        // Handle native file drops
+        if (monitor.getItemType() === NativeTypes.FILE) {
+          console.log("Native file drop on folder");
+          const fileList = monitor.getItem().files;
+          if (fileList && fileList.length) {
+            handleFileUpload(Array.from(fileList), item.id);
+          }
+          return;
+        }
+        
+        // Cannot drop onto self
+        if ('id' in droppedItem && droppedItem.id === item.id) {
+          console.log("Cannot drop onto self");
+          return;
+        }
+        
+        // Handle internal moves
+        if ('id' in droppedItem) {
+          console.log(`Moving ${droppedItem.id} to ${item.id}`);
+          handleMoveItem(droppedItem.id, item.id);
         }
       },
-      canDrop: (draggedItem) => {
-        // Don't allow dropping on itself or non-folders
-        return draggedItem.id !== item.id && item.type === 'folder';
+      canDrop: (droppedItem, monitor) => {
+        // Only folders can accept drops
+        if (item.type !== 'folder') return false;
+        
+        // For files from outside, always allow
+        if (monitor.getItemType() === NativeTypes.FILE) return true;
+        
+        // Cannot drop onto self
+        if ('id' in droppedItem && droppedItem.id === item.id) return false;
+        
+        return true;
       },
       collect: (monitor) => ({
         isOver: !!monitor.isOver(),
         canDrop: !!monitor.canDrop()
       })
-    }), [item.id, item.type]);
-
-    // Combine drag and drop refs for folders
-    let itemRef;
-    if (item.type === 'folder') {
-      itemRef = (el: HTMLDivElement) => {
-        drag(el);
-        folderDrop(el);
-      };
-    } else {
-      itemRef = drag;
-    }
+    });
 
     // Determine file icon based on file type
     const getFileIcon = () => {
@@ -399,46 +466,73 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
       return <File className="h-4 w-4 text-gray-400" />;
     };
 
+    // References and functions
+    const itemRef = useRef<HTMLDivElement>(null);
+    
+    // Set up drag and drop ref
+    const dragDropRef = (node: HTMLDivElement | null) => {
+      drag(node);
+      if (item.type === 'folder') {
+        drop(node);
+      }
+    };
+
     // Style based on drag/drop state
-    const style: React.CSSProperties = {
-      opacity: isDragging ? 0.5 : 1,
-      paddingLeft: `${depth * 16 + 8}px`,
-      backgroundColor: isActive 
-        ? 'rgba(59, 130, 246, 0.5)' 
-        : isOver && canDrop 
-          ? 'rgba(59, 130, 246, 0.2)' 
-          : undefined,
-      borderWidth: isOver && canDrop ? '1px' : '0px',
-      borderStyle: isOver && canDrop ? 'dashed' : 'none',
-      borderColor: isOver && canDrop ? '#60a5fa' : 'transparent'
+    const getItemStyle = () => {
+      let style: React.CSSProperties = {
+        opacity: isDragging ? 0.5 : 1,
+        paddingLeft: `${depth * 16 + 8}px`
+      };
+      
+      if (isOver && canDrop) {
+        style.backgroundColor = 'rgba(59, 130, 246, 0.2)';
+        style.borderWidth = '1px';
+        style.borderStyle = 'dashed';
+        style.borderColor = '#60a5fa';
+      } else if (isActive) {
+        style.backgroundColor = 'rgba(59, 130, 246, 0.5)';
+      }
+      
+      return style;
+    };
+    
+    const handleItemClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (item.type === 'file') {
+        onFileSelect(item.id);
+      }
     };
 
     return (
       <div
-        ref={itemRef}
+        ref={dragDropRef}
         className={`flex items-center py-1.5 px-2 my-0.5 rounded cursor-pointer hover:bg-gray-700 transition-colors duration-100 group`}
-        style={style}
-        onClick={item.type === 'folder' ? () => handleToggleFolder(item.id) : () => onFileSelect(item.id)}
+        style={getItemStyle()}
+        onClick={handleItemClick}
         onContextMenu={(e) => handleContextMenu(e, item)}
       >
+        {/* Folder chevron or spacer */}
         {item.type === 'folder' ? (
-          <>
+          <span onClick={(e) => handleToggleFolder(item.id, e)}>
             {isExpanded ? (
               <ChevronDown className="h-3.5 w-3.5 text-gray-400 mr-1.5" />
             ) : (
               <ChevronRight className="h-3.5 w-3.5 text-gray-400 mr-1.5" />
             )}
-          </>
+          </span>
         ) : (
           <div className="w-3.5 mr-1.5"></div>
         )}
         
+        {/* Item icon */}
         {getFileIcon()}
         
+        {/* Item name */}
         <span className={`ml-2 text-sm truncate ${isActive ? 'text-white font-medium' : 'text-gray-300'}`}>
           {item._name_}
         </span>
         
+        {/* Context menu button */}
         <div className="ml-auto opacity-0 group-hover:opacity-100 flex items-center">
           <button
             className="p-0.5 text-gray-400 hover:text-white rounded-sm"
@@ -478,63 +572,74 @@ const DraggableFileTreeContent: React.FC<DraggableFileTreeProps> = ({
   const fileTree = buildFileTree();
 
   return (
-    <div 
-      ref={(el) => {
-        rootRef.current = el;
-        drop(el);
-      }}
-      className={`h-full overflow-auto px-2 py-2 ${isOver && canDrop ? 'bg-gray-800/60 border-2 border-dashed border-blue-500/50' : ''}`}
-    >
-      {/* Empty state message when no files */}
-      {files.length === 0 && (
-        <div className="text-center py-6">
-          <p className="text-gray-400 mb-2">No files yet</p>
-          <p className="text-gray-500 text-sm">
-            Drag files here or create a new file
-          </p>
+    <div className="h-full flex flex-col">
+      {/* Status message */}
+      {statusMessage && (
+        <div className="bg-blue-900/40 border-l-4 border-blue-500 p-2 text-sm text-blue-100 mb-2">
+          {statusMessage}
         </div>
       )}
       
-      {/* Project files tree */}
-      {fileTree.length > 0 && renderFileTree(fileTree)}
-      
-      {/* Drop files here message when dragging over */}
-      {isOver && canDrop && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="bg-gray-800 rounded-lg p-4 shadow-lg border border-blue-500">
-            <Upload className="h-8 w-8 text-blue-400 mx-auto mb-2" />
-            <p className="text-blue-300 text-center">Drop files here</p>
+      <div 
+        ref={(el) => {
+          rootRef.current = el;
+          rootDrop(el);
+        }}
+        className={`flex-1 h-full overflow-auto px-2 py-2 ${
+          isRootOver && canDropOnRoot ? 'bg-gray-800/60 border-2 border-dashed border-blue-500/50' : ''
+        }`}
+      >
+        {/* Empty state message when no files */}
+        {files.length === 0 && (
+          <div className="text-center py-6">
+            <p className="text-gray-400 mb-2">No files yet</p>
+            <p className="text-gray-500 text-sm">
+              Drag files here or create a new file
+            </p>
           </div>
-        </div>
-      )}
-      
-      {/* Context menu */}
-      {contextMenu && contextMenu.item && (
-        <div
-          ref={contextMenuRef}
-          className="fixed bg-gray-800 border border-gray-700 rounded shadow-lg py-1 z-50"
-          style={{ 
-            left: contextMenu.x, 
-            top: contextMenu.y,
-            minWidth: '160px' 
-          }}
-        >
-          <button
-            className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 flex items-center text-gray-200"
-            onClick={handleRename}
+        )}
+        
+        {/* Project files tree */}
+        {fileTree.length > 0 && renderFileTree(fileTree)}
+        
+        {/* Drop files here message when dragging over */}
+        {isRootOver && canDropOnRoot && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="bg-gray-800 rounded-lg p-4 shadow-lg border border-blue-500">
+              <Upload className="h-8 w-8 text-blue-400 mx-auto mb-2" />
+              <p className="text-blue-300 text-center">Drop files here</p>
+            </div>
+          </div>
+        )}
+        
+        {/* Context menu */}
+        {contextMenu && contextMenu.item && (
+          <div
+            ref={contextMenuRef}
+            className="fixed bg-gray-800 border border-gray-700 rounded shadow-lg py-1 z-50"
+            style={{ 
+              left: contextMenu.x, 
+              top: contextMenu.y,
+              minWidth: '160px' 
+            }}
           >
-            <Edit className="h-3.5 w-3.5 mr-2 text-gray-400" />
-            Rename
-          </button>
-          <button
-            className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 flex items-center text-red-400"
-            onClick={handleDelete}
-          >
-            <Trash className="h-3.5 w-3.5 mr-2 text-red-400" />
-            Delete
-          </button>
-        </div>
-      )}
+            <button
+              className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 flex items-center text-gray-200"
+              onClick={handleRename}
+            >
+              <Edit className="h-3.5 w-3.5 mr-2 text-gray-400" />
+              Rename
+            </button>
+            <button
+              className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 flex items-center text-red-400"
+              onClick={handleDelete}
+            >
+              <Trash className="h-3.5 w-3.5 mr-2 text-red-400" />
+              Delete
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
