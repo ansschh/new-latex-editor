@@ -22,94 +22,110 @@ interface CompilationResult {
 // services/latexService.ts
 // Updated to better handle PDF data
 
-export async function compileLatex(latex: string): Promise<{
+export async function compileLatex(code: string, projectId: string): Promise<{
   success: boolean;
   pdfData?: string;
   htmlPreview?: string;
   error?: string;
-  log?: string;
 }> {
   try {
-    console.log("Compiling LaTeX with client-side rendering...");
+    console.log(`Compiling LaTeX with projectId: ${projectId}`);
     
-    // Create a fallback browser-rendered preview using KaTeX
-    const htmlPreview = createKatexHtmlPreview(latex);
+    // First, let's modify the LaTeX code to properly handle images
+    let processedCode = code;
     
-    try {
-      // Use Next.js API route instead of direct server call
-      const response = await fetch('/api/compile-latex', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ latex }),
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("Server compilation failed:", errorData);
-        
-        // Return the fallback preview when server compilation fails
-        return {
-          success: true,
-          htmlPreview,
-          log: "Successfully compiled in browser (fallback)"
-        };
+    // Ensure graphicx package is included if the document uses images
+    if (!processedCode.includes('\\usepackage{graphicx}') && 
+        !processedCode.includes('\\usepackage[pdftex]{graphicx}')) {
+      // If documentclass exists, add graphicx package after it
+      if (processedCode.includes('\\documentclass')) {
+        processedCode = processedCode.replace(
+          /(\\documentclass.*?\})/,
+          '$1\n\\usepackage[pdftex]{graphicx}'
+        );
+        console.log("Added graphicx package to LaTeX content");
       }
+    }
+    
+    // Add graphicspath to help LaTeX find images in different folders
+    if (!processedCode.includes('\\graphicspath')) {
+      // Create a graphicspath command that includes multiple possible locations
+      const graphicsPathCmd = '\\graphicspath{{./}{./images/}{.}}\n';
       
-      // Get response data
-      const data = await response.json();
-      console.log("Received compilation response:", data);
-      
-      if (data.success) {
-        if (data.pdfData) {
-          // Make sure we have a properly formatted data URL
-          let pdfData = data.pdfData;
-          if (!pdfData.startsWith('data:application/pdf;base64,') && pdfData.match(/^[A-Za-z0-9+/=]+$/)) {
-            pdfData = `data:application/pdf;base64,${pdfData}`;
-          }
-          
-          return {
-            success: true,
-            pdfData,
-            log: "Successfully compiled with server"
-          };
-        } else if (data.htmlPreview) {
-          return {
-            success: true,
-            htmlPreview: data.htmlPreview,
-            log: data.message || "Successfully compiled with server"
-          };
-        } else {
-          // If no specific data was returned, use our client-side rendering
-          return {
-            success: true,
-            htmlPreview,
-            log: "Successfully compiled in browser (fallback)"
-          };
-        }
+      // Add after documentclass and packages but before begin document
+      if (processedCode.includes('\\begin{document}')) {
+        processedCode = processedCode.replace(
+          /(\\begin\{document\})/,
+          `${graphicsPathCmd}$1`
+        );
       } else {
-        throw new Error(data.error || "Unknown server error");
+        // If no begin document, add at the beginning
+        processedCode = graphicsPathCmd + processedCode;
       }
       
-    } catch (serverError) {
-      console.warn("Server-side rendering failed, falling back to browser rendering", serverError);
-      
-      // Return the fallback preview when server compilation fails
+      console.log("Added graphicspath command to LaTeX content");
+    }
+    
+    // Extract image references from LaTeX to prepare them for server-side rendering
+    const imageReferences = extractImageReferences(processedCode);
+    console.log("Image references found in LaTeX:", imageReferences);
+    
+    // Send modified code to LaTeX compilation endpoint
+    console.log('Sending request to LaTeX API...');
+    const response = await fetch('/api/compile-latex', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        latex: processedCode,
+        projectId: projectId, // Pass projectId for image handling
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Error response from LaTeX API:', errorText);
       return {
-        success: true,
-        htmlPreview,
-        log: "Successfully compiled in browser (fallback)"
+        success: false,
+        error: `Compilation failed: ${response.status} ${response.statusText}`,
       };
     }
+
+    const result = await response.json();
+    console.log('Received response from LaTeX API');
+
+    if (!result.success) {
+      return {
+        success: false,
+        error: result.error || 'Unknown error during compilation',
+      };
+    }
+
+    return {
+      success: true,
+      pdfData: result.pdfData,
+      htmlPreview: result.htmlPreview,
+    };
   } catch (error) {
-    console.error("LaTeX compilation failed:", error);
+    console.error('Error in LaTeX compilation service:', error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Unknown error"
+      error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
 }
+
+
+function extractImageReferences(latex: string): string[] {
+  // Regular expression to match \includegraphics commands
+  const regex = /\\includegraphics(?:\[.*?\])?\{([^{}]+)\}/g;
+  const matches = [...latex.matchAll(regex)];
+  
+  // Extract the file paths and return unique values
+  return [...new Set(matches.map(match => match[1]))];
+}
+
 
 // Create KaTeX-compatible HTML preview for client-side rendering
 function createKatexHtmlPreview(latex: string): string {

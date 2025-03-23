@@ -158,3 +158,30 @@ body::before {
 .latex-preview {
   padding: 1rem;
 }
+
+// Add this CSS to your global styles or a component-specific CSS file
+// This will ensure CodeMirror is scrollable
+
+/*
+  To fix CodeMirror scrolling issues, add these styles:
+*/
+.cm-editor {
+  height: 100%;
+  overflow: auto !important;
+}
+
+.cm-scroller {
+  overflow: auto !important;
+}
+
+/* Ensure the container for CodeMirror is set to proper height */
+.editor-container {
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 
+  Then update your CodeMirror component in LatexEditor.tsx by wrapping it in a div with the editor-container class:
+*/

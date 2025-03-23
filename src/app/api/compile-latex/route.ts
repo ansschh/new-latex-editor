@@ -1,9 +1,14 @@
 // app/api/compile-latex/route.ts
 import { NextRequest, NextResponse } from 'next/server';
+import { getDoc, doc, collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
 export async function POST(request: NextRequest) {
   try {
-    const { latex } = await request.json();
+    const { latex, projectId } = await request.json();
     
     if (!latex) {
       return NextResponse.json({ 
@@ -12,28 +17,189 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
     
-    // Create HTML preview (used as fallback)
-    const htmlPreview = createKatexHtmlPreview(latex);
+    // Extract image references from LaTeX content
+    const imageReferences = extractImageReferences(latex);
+    console.log('Found image references:', imageReferences);
+
+    // Array to hold image data to send to the LaTeX server
+    const imagesToSend = [];
     
     try {
-      // Try to access the LaTeX server directly (server-to-server)
+      // If projectId is provided, try to fetch the images from Firestore
+      if (projectId && imageReferences.length > 0) {
+        // Create a query to find all project files
+        const filesQuery = query(
+          collection(db, "projectFiles"),
+          where("projectId", "==", projectId)
+        );
+        
+        const querySnapshot = await getDocs(filesQuery);
+        const projectFiles = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        
+        console.log(`Found ${projectFiles.length} project files`);
+        
+        // For each image reference, try to find a matching file
+        for (const imgRef of imageReferences) {
+          console.log(`Looking for image: ${imgRef}`);
+          
+          // Try different ways to match the filename
+          const matchingFile = projectFiles.find(file => 
+            file.name === imgRef || 
+            file.name === `/${imgRef}` ||
+            file.name.endsWith(`/${imgRef}`) ||
+            file.name.toLowerCase() === imgRef.toLowerCase() ||
+            (file.name.toLowerCase().includes(".jpg") || 
+             file.name.toLowerCase().includes(".png") || 
+             file.name.toLowerCase().includes(".jpeg")) && 
+            file.name.toLowerCase().includes(imgRef.toLowerCase().replace(/\.[^/.]+$/, ""))
+          );
+          
+          if (matchingFile) {
+            console.log(`Found matching file for ${imgRef}: ${matchingFile.name}`);
+            
+            // Check different ways the image data might be stored
+            if (matchingFile.dataUrl) {
+              console.log(`Using dataUrl field for ${imgRef}`);
+              
+              // Extract the base64 data from the data URL if needed
+              if (matchingFile.dataUrl.startsWith('data:')) {
+                const matches = matchingFile.dataUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+                
+                if (matches && matches.length === 3) {
+                  const base64Data = matches[2];
+                  console.log(`Extracted base64 data for ${imgRef} (${base64Data.length} chars)`);
+                  
+                  imagesToSend.push({
+                    name: imgRef,
+                    data: base64Data,
+                    type: matches[1]
+                  });
+                } else {
+                  console.log(`Could not extract base64 data from dataUrl for ${imgRef}`);
+                }
+              } else {
+                // Assume it's already base64
+                console.log(`Using dataUrl as base64 directly for ${imgRef}`);
+                imagesToSend.push({
+                  name: imgRef,
+                  data: matchingFile.dataUrl,
+                  type: 'image/jpeg' // Default type
+                });
+              }
+            } 
+            else if (matchingFile.content && typeof matchingFile.content === 'string' && 
+                    (matchingFile.content.startsWith('data:') || 
+                     matchingFile.content.match(/^[A-Za-z0-9+/=]+$/))) {
+              console.log(`Using content field for ${imgRef}`);
+              
+              // If content looks like a data URL or base64
+              if (matchingFile.content.startsWith('data:')) {
+                const matches = matchingFile.content.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+                
+                if (matches && matches.length === 3) {
+                  imagesToSend.push({
+                    name: imgRef,
+                    data: matches[2],
+                    type: matches[1]
+                  });
+                }
+              } else if (matchingFile.content.match(/^[A-Za-z0-9+/=]+$/)) {
+                // Appears to be base64 directly
+                imagesToSend.push({
+                  name: imgRef,
+                  data: matchingFile.content,
+                  type: 'image/jpeg' // Default type
+                });
+              }
+            }
+            else if (matchingFile.url) {
+              console.log(`Found URL for ${imgRef}: ${matchingFile.url}`);
+              // For URLs, we'd typically need to fetch them server-side
+              // This would require additional server-side code
+              // For now we'll just log it
+            }
+            else {
+              console.log(`No usable image data found in matching file for ${imgRef}`);
+            }
+          } else {
+            console.log(`Could not find matching file for ${imgRef} in project files`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error processing image references:', error);
+      // Continue with compilation even if image processing fails
+    }
+    
+    // Check if we have any modifiable LaTeX content
+    let processedLaTeX = latex;
+    
+    // Add graphicspath if it doesn't exist
+    if (!processedLaTeX.includes('\\graphicspath')) {
+      // Create a graphicspath command that includes multiple possible locations
+      const graphicsPathCmd = '\\graphicspath{{./}{./images/}{.}}\n';
+      
+      // Add after documentclass and packages but before begin document
+      if (processedLaTeX.includes('\\begin{document}')) {
+        processedLaTeX = processedLaTeX.replace(
+          /(\\begin\{document\})/,
+          `${graphicsPathCmd}$1`
+        );
+      } else {
+        // If no begin document, add at the beginning
+        processedLaTeX = graphicsPathCmd + processedLaTeX;
+      }
+      
+      console.log("Added graphicspath command to LaTeX content");
+    }
+    
+    // Make sure graphicx package is included
+    if (!processedLaTeX.includes('\\usepackage{graphicx}') && 
+        !processedLaTeX.includes('\\usepackage[pdftex]{graphicx}')) {
+      if (processedLaTeX.includes('\\documentclass')) {
+        processedLaTeX = processedLaTeX.replace(
+          /(\\documentclass.*?\})/,
+          '$1\n\\usepackage[pdftex]{graphicx}'
+        );
+        console.log("Added graphicx package to LaTeX content");
+      }
+    }
+    
+    // Create HTML preview (used as fallback)
+    const htmlPreview = createKatexHtmlPreview(processedLaTeX);
+    
+    try {
+      console.log(`Sending request to LaTeX server with ${imagesToSend.length} images`);
+      
+      // Create request data with image information
+      const requestData = {
+        latex: processedLaTeX,
+        format: 'pdf',
+        images: imagesToSend
+      };
+      
+      // Try to access the LaTeX server with the image data
       const serverResponse = await fetch('http://localhost:3001/render', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ latex, format: 'pdf' }),
-        // Important for Next.js to not cache this request
+        body: JSON.stringify(requestData),
         cache: 'no-store'
       });
       
+      // Handle the server response
       if (!serverResponse.ok) {
-        // If server responds with error, we'll use the HTML fallback
-        console.error('LaTeX server error:', await serverResponse.text());
+        const errorText = await serverResponse.text();
+        console.error('LaTeX server error:', errorText);
         throw new Error('LaTeX server returned an error response');
       }
       
       const responseData = await serverResponse.json();
+      console.log('LaTeX server response received');
       
       // If we got PDF data, return it
       if (responseData.format === 'pdf' && responseData.data) {
@@ -69,6 +235,46 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// Function to extract image references from LaTeX content
+function extractImageReferences(latex: string): string[] {
+  // Regular expressions to match various image inclusion commands
+  const patterns = [
+    /\\includegraphics(?:\[.*?\])?\{([^{}]+)\}/g,      // Standard includegraphics
+    /\\includesvg(?:\[.*?\])?\{([^{}]+)\}/g,           // includesvg if used
+    /\\includestandalone(?:\[.*?\])?\{([^{}]+)\}/g,    // includestandalone if used
+    /\\import\{([^{}]+)\}\{([^{}]+)\}/g,               // import command
+    /\\input\{([^{}]+)\}/g                             // input command (might contain images)
+  ];
+  
+  let matches: string[] = [];
+  
+  // Extract matches from each pattern
+  patterns.forEach(pattern => {
+    const patternMatches = [...latex.matchAll(pattern)];
+    const extractedPaths = patternMatches.map(match => {
+      // For import command, combine the path and filename
+      if (pattern.toString().includes('\\\\import')) {
+        return `${match[1]}/${match[2]}`;
+      }
+      return match[1];
+    });
+    matches = [...matches, ...extractedPaths];
+  });
+  
+  // Process paths to handle extensions properly
+  const processedMatches = matches.map(path => {
+    // If no extension is provided, LaTeX will look for common image extensions
+    if (!path.includes('.')) {
+      return path; // Return as is, the compile function will try different extensions
+    }
+    return path;
+  });
+  
+  // Return unique values
+  return [...new Set(processedMatches)];
+}
+
+
 // Create KaTeX-compatible HTML preview for client-side rendering
 function createKatexHtmlPreview(latex: string): string {
   // Extract metadata
@@ -93,6 +299,12 @@ function createKatexHtmlPreview(latex: string): string {
     .replace(/\\section\{([^}]+)\}/g, '<h2 class="text-2xl font-bold mt-6 mb-3 pb-1 border-b border-gray-300 text-black">$1</h2>')
     .replace(/\\subsection\{([^}]+)\}/g, '<h3 class="text-xl font-semibold mt-5 mb-2 text-black">$1</h3>')
     .replace(/\\subsubsection\{([^}]+)\}/g, '<h4 class="text-lg font-semibold mt-4 mb-2 text-black">$1</h4>')
+    
+    // Handle images
+    .replace(/\\includegraphics(?:\[([^\]]*)\])?\{([^}]+)\}/g, (match, options, file) => {
+      const width = options?.match(/width=([^,}]+)/) ? options.match(/width=([^,}]+)/)[1] : '80%';
+      return `<div class="my-4 text-center p-4 bg-gray-100 rounded"><div class="border-2 border-dashed border-gray-300 p-4 bg-white"><div class="text-gray-500 font-medium">Image: ${file}</div></div><div class="text-sm text-gray-500 mt-2">${file}</div></div>`;
+    })
     
     // Preserve math expressions for KaTeX
     .replace(/\\begin\{equation\}/g, '$$')
@@ -154,9 +366,4 @@ function createKatexHtmlPreview(latex: string): string {
       </div>
     </div>
   `;
-}
-
-// Health check endpoint to test API availability
-export async function GET() {
-  return NextResponse.json({ status: 'ok', message: 'LaTeX API route is working' });
 }

@@ -3,12 +3,16 @@
 
 import React, { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
-import { Loader } from "lucide-react";
 import { useAuth } from "@clerk/nextjs";
 import dynamic from "next/dynamic";
+import { 
+  Loader, Save, Download, Play, Edit, Eye, Layout, Menu,
+  FileText, Folder, RefreshCw, ChevronRight, ChevronDown,
+  ZoomIn, ZoomOut, RotateCw, X, FileUp, Trash, Copy, ChevronLeft
+} from "lucide-react";
 
 // Dynamically import the editor to avoid SSR issues
-const BasicEditor = dynamic(() => import("../../../components/LatexEditor"), {
+const ModernEditor = dynamic(() => import("../../../components/LatexEditor"), {
   ssr: false,
   loading: () => (
     <div className="flex h-screen w-full items-center justify-center bg-gray-900">
@@ -76,7 +80,7 @@ export default function EditorPage() {
   
   // Render editor with the project ID and user ID
   return (
-    <BasicEditor 
+    <ModernEditor 
       projectId={id as string} 
       userId={userId as string} 
     />
