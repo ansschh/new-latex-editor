@@ -1,0 +1,48 @@
+\documentclass{article}
+\title{My Research Paper}
+\author{Author Name}
+\date{\today}
+
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{hyperref}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+This is the introduction of my research paper.
+
+\section{Methodology}
+We use various mathematical formulas:
+
+\begin{equation}
+E = mc^2
+\end{equation}
+
+\begin{align}
+x &= y + z\\
+&= w + v
+\end{align}
+
+\section{Results}
+The results are summarized in Table \ref{tab:results}.
+
+\begin{table}[h]
+  \centering
+  \caption{Summary of Results}
+  \label{tab:results}
+  \begin{tabular}{lcr}
+    \hline
+    Method & Accuracy & Time (s) \\
+    \hline
+    Method 1 & 92.1\% & 2.3 \\
+    Method 2 & 95.4\% & 5.1 \\
+    Method 3 & 98.7\% & 8.4 \\
+    \hline
+  \end{tabular}
+\end{table}
+
+\end{document}

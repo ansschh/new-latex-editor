@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LaTeX Rendering Server Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            font-family: monospace;
+            margin-bottom: 10px;
+        }
+        .result {
+            margin-top: 20px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            min-height: 100px;
+        }
+        .error {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>LaTeX Rendering Server Test</h1>
+    
+    <h2>Document Renderer</h2>
+    <textarea id="latex-input">
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+Hello, this is a test document with some math: $E=mc^2$
+
+\begin{align}
+\int_{a}^{b} f(x) \, dx = F(b) - F(a)
+\end{align}
+
+\end{document}
+    </textarea>
+    
+    <div>
+        <label>
+            <input type="radio" name="format" value="pdf" checked> PDF
+        </label>
+        <label>
+            <input type="radio" name="format" value="png"> PNG
+        </label>
+    </div>
+    
+    <button id="render-btn">Render</button>
+    
+    <div class="result" id="result">
+        <p>Rendered output will appear here.</p>
+    </div>
+    
+    <h2>Math Formula Renderer</h2>
+    <textarea id="math-input">\int_{a}^{b} f(x) \, dx = F(b) - F(a)</textarea>
+    
+    <div>
+        <label>
+            <input type="checkbox" id="display-mode"> Display Mode
+        </label>
+    </div>
+    
+    <button id="render-math-btn">Render Formula</button>
+    
+    <div class="result" id="math-result">
+        <p>Rendered formula will appear here.</p>
+    </div>
+
+    <script>
+        document.getElementById('render-btn').addEventListener('click', async () => {
+            const latex = document.getElementById('latex-input').value;
+            const format = document.querySelector('input[name="format"]:checked').value;
+            const resultDiv = document.getElementById('result');
+            
+            resultDiv.innerHTML = '<p>Rendering...</p>';
+            
+            try {
+                const response = await fetch('/render', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ latex, format })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    resultDiv.innerHTML = `<div class="error">Error: ${data.error}</div>`;
+                    return;
+                }
+                
+                if (format === 'pdf') {
+                    resultDiv.innerHTML = `
+                        <p>PDF generated successfully!</p>
+                        <p><a href="data:application/pdf;base64,${data.data}" download="output.pdf">Download PDF</a></p>
+                        <embed src="data:application/pdf;base64,${data.data}" width="100%" height="500" type="application/pdf">
+                    `;
+                } else if (format === 'png') {
+                    resultDiv.innerHTML = `
+                        <p>Image generated successfully!</p>
+                        <p><a href="data:image/png;base64,${data.data}" download="output.png">Download PNG</a></p>
+                        <img src="data:image/png;base64,${data.data}" style="max-width: 100%;">
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        });
+        
+        document.getElementById('render-math-btn').addEventListener('click', async () => {
+            const latex = document.getElementById('math-input').value;
+            const displayMode = document.getElementById('display-mode').checked;
+            const resultDiv = document.getElementById('math-result');
+            
+            resultDiv.innerHTML = '<p>Rendering...</p>';
+            
+            try {
+                const response = await fetch('/render-math', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ latex, displayMode })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    resultDiv.innerHTML = `<div class="error">Error: ${data.error}</div>`;
+                    return;
+                }
+                
+                resultDiv.innerHTML = `
+                    <img src="data:image/png;base64,${data.data}" style="max-width: 100%;">
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        });
+    </script>
+</body>
+</html>

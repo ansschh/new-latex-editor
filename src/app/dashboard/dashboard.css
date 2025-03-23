@@ -1,0 +1,185 @@
+/* dashboard.css */
+
+/* Custom shadows */
+.card-shadow {
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05), 
+              0 1px 2px rgba(0, 0, 0, 0.06);
+  transition: box-shadow 0.2s ease-in-out;
+}
+
+.card-shadow:hover {
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08), 
+              0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+/* Custom checkbox styling */
+.custom-checkbox {
+  border-radius: 3px;
+  transition: all 0.2s;
+}
+
+.custom-checkbox:checked {
+  background-color: #0D9488; /* teal-600 */
+  border-color: #0D9488;
+}
+
+/* Tag badges */
+.tag-badge {
+  transition: all 0.2s;
+}
+
+.tag-badge:hover {
+  filter: brightness(0.95);
+}
+
+/* Sidebar tab hover effects */
+.sidebar-tab {
+  transition: all 0.15s ease-in-out;
+}
+
+.sidebar-tab:hover {
+  background-color: rgba(236, 254, 255, 0.5);
+  color: #0D9488;
+}
+
+/* Premium badge gradient */
+.premium-badge {
+  background: linear-gradient(135deg, rgba(236, 254, 255, 0.7) 0%, rgba(240, 249, 255, 0.7) 100%);
+  border: 1px solid rgba(13, 148, 136, 0.2);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+/* Project row hover */
+.project-row {
+  transition: background-color 0.15s ease-in-out;
+}
+
+.project-row:hover {
+  background-color: #F9FAFB; /* gray-50 */
+}
+
+/* Action buttons */
+.action-button {
+  transition: color 0.15s ease-in-out;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.action-button:hover {
+  background-color: #F3F4F6; /* gray-100 */
+}
+
+/* Project card animations */
+.project-card {
+  transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+}
+
+.project-card:hover {
+  transform: translateY(-2px);
+}
+
+/* Modal animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from { transform: translateY(-10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-overlay {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.modal-content {
+  animation: slideIn 0.2s ease-out;
+}
+
+/* Add these to your dashboard.css file */
+.sidebar-text {
+  color: #0D9488; /* Teal-600 */
+  font-weight: 500;
+}
+
+.sidebar-icon {
+  color: #0D9488; /* Teal-600 */
+}
+
+.sidebar-tab {
+  transition: all 0.15s ease-in-out;
+}
+
+.sidebar-tab:hover {
+  background-color: rgba(236, 254, 255, 0.5);
+}
+
+.sidebar-tab.active {
+  background-color: #ECFEFF; /* Teal-50 */
+  color: #0D9488; /* Teal-600 */
+}
+
+.sidebar-heading {
+  color: #6B7280; /* Gray-500 */
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.dialog-text {
+  color: #1F2937; /* Gray-800 */
+  font-weight: 500;
+}
+
+.template-card {
+  border: 1px solid #E5E7EB;
+  background-color: white;
+  color: #374151;
+  transition: all 0.2s ease;
+}
+
+.template-card:hover, .template-card.active {
+  border-color: #0D9488;
+  background-color: rgba(13, 148, 136, 0.05);
+}
+
+.tag-text {
+  color: #0D9488;
+}
+
+// Add these CSS classes to your dashboard.css
+.modal-label {
+  color: #1F2937; /* Gray-800 */
+  font-weight: 500;
+}
+
+.template-card {
+  border: 1px solid #E5E7EB;
+  background-color: white;
+  color: #374151;
+  transition: all 0.2s ease;
+  border-radius: 0.375rem;
+}
+
+.template-card:hover {
+  border-color: #0D9488;
+  background-color: rgba(13, 148, 136, 0.05);
+}
+
+.template-card.active {
+  border-color: #0D9488;
+  background-color: rgba(13, 148, 136, 0.05);
+  box-shadow: 0 0 0 1px #0D9488;
+}
+
+.template-title {
+  color: #1F2937; /* Gray-800 */
+  font-weight: 500;
+}
+
+.template-description {
+  color: #6B7280; /* Gray-500 */
+  font-size: 0.75rem;
+}

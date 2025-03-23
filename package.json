@@ -1,0 +1,45 @@
+{
+  "name": "my-web-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "setup": "node setup-latex.js"
+  },
+  "dependencies": {
+    "@clerk/nextjs": "^6.12.5",
+    "@codemirror/autocomplete": "^6.10.2",
+    "@codemirror/lang-markdown": "^6.3.2",
+    "@codemirror/language": "^6.9.3",
+    "@codemirror/legacy-modes": "^6.3.3",
+    "@codemirror/state": "^6.3.2",
+    "@codemirror/theme-one-dark": "^6.1.2",
+    "@codemirror/view": "^6.22.1",
+    "@uiw/react-codemirror": "^4.23.10",
+    "firebase": "^11.4.0",
+    "firebase-admin": "^13.2.0",
+    "katex": "^0.16.21",
+    "latex.js": "^0.12.6",
+    "lucide-react": "^0.479.0",
+    "next": "15.2.2",
+    "pdf-lib": "^1.17.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@types/uuid": "^9.0.7",
+    "eslint": "^9",
+    "eslint-config-next": "15.2.2",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
