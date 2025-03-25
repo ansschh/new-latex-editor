@@ -1,24 +1,14 @@
-// Firebase Storage CORS Configuration
-// This is not part of your application code but a configuration you need to set up
-// Save this as cors.json and use the Firebase CLI to configure CORS for your Storage bucket
-
 [
-    {
-      "origin": ["http://localhost:3000", "https://yourdomain.com"],
-      "method": ["GET", "POST", "PUT", "DELETE", "HEAD"],
-      "maxAgeSeconds": 3600,
-      "responseHeader": [
-        "Content-Type", 
-        "Authorization", 
-        "Content-Length", 
-        "User-Agent", 
-        "x-goog-resumable"
-      ]
-    }
-  ]
-  
-  // Then run the following command using the Firebase CLI:
-  // firebase storage:cors update cors.json --project your-project-id
-  
-  // Note: Replace "https://yourdomain.com" with your actual production domain.
-  // If you have multiple domains, add them to the "origin" array.
+  {
+    "origin": ["http://localhost:3000", "https://your-production-domain.com"],
+    "method": ["GET", "POST", "PUT", "DELETE", "HEAD"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": [
+      "Content-Type", 
+      "Authorization", 
+      "Content-Length", 
+      "User-Agent", 
+      "x-goog-resumable"
+    ]
+  }
+]

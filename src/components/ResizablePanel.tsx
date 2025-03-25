@@ -1,4 +1,5 @@
-// Enhanced ResizablePanel.tsx with better performance
+// Enhanced ResizablePanel.tsx with improved resizing behavior
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 
 interface ResizablePanelProps {
@@ -32,6 +33,7 @@ const ResizablePanel: React.FC<ResizablePanelProps> = ({
   const startPos = useRef(0);
   const startSize = useRef(0);
   const rafId = useRef<number | null>(null);
+  const resizeEdge = useRef<'start' | 'end'>('end');
   
   // Threshold for minimum movement to trigger a resize (helps with micro-jitters)
   const MOVEMENT_THRESHOLD = 2;
@@ -46,7 +48,7 @@ const ResizablePanel: React.FC<ResizablePanelProps> = ({
     }
   }, [initialSize]);
 
-  // Optimized resize handler using requestAnimationFrame with movement threshold
+  // Enhanced resize handler using requestAnimationFrame with movement threshold
   const handleResize = useCallback((clientPos: number, edge: 'start' | 'end') => {
     if (!isResizing.current || !containerRef.current) return;
     
@@ -95,12 +97,13 @@ const ResizablePanel: React.FC<ResizablePanelProps> = ({
     });
   }, [minSize, maxSize, onChange, direction]);
 
-  // Enhanced mouse down event handler
+  // Enhanced mouse down event handler with edge detection
   const handleMouseDown = useCallback((e: React.MouseEvent, edge: 'start' | 'end') => {
     e.preventDefault();
     e.stopPropagation();
     
     isResizing.current = true;
+    resizeEdge.current = edge;
     startPos.current = direction === 'horizontal' ? e.clientX : e.clientY;
     startSize.current = size;
     
@@ -109,21 +112,12 @@ const ResizablePanel: React.FC<ResizablePanelProps> = ({
     document.body.style.userSelect = 'none';
     document.body.classList.add('resizing');
     
-    // Add an overlay to prevent interaction with other elements
-    const overlay = document.createElement('div');
-    overlay.className = 'resizing-overlay';
-    overlay.style.position = 'fixed';
-    overlay.style.inset = '0';
-    overlay.style.zIndex = '9999';
-    overlay.style.pointerEvents = 'none'; // Allow mouse events to pass through
-    document.body.appendChild(overlay);
-
     // Call onResizeStart callback if provided
     if (onResizeStart) onResizeStart();
 
     // Add event listeners to document
     document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', () => handleMouseUp(overlay));
+    document.addEventListener('mouseup', handleMouseUp);
   }, [direction, size, onResizeStart]);
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
@@ -132,29 +126,15 @@ const ResizablePanel: React.FC<ResizablePanelProps> = ({
     // Get current pointer position
     const currentPos = direction === 'horizontal' ? e.clientX : e.clientY;
     
-    // Determine which edge we're resizing from
-    let edge: 'start' | 'end' = 'end';
-    
-    if (direction === 'horizontal' && containerRef.current) {
-      const containerRect = containerRef.current.getBoundingClientRect();
-      // Detect if we're resizing from the left edge (start)
-      const isLeftResize = startPos.current < containerRect.left + 10;
-      edge = isLeftResize ? 'start' : 'end';
-    }
-    
-    handleResize(currentPos, edge);
+    // Use the edge that was set when the drag started
+    handleResize(currentPos, resizeEdge.current);
   }, [direction, handleResize]);
 
-  const handleMouseUp = useCallback((overlay: HTMLElement) => {
+  const handleMouseUp = useCallback(() => {
     isResizing.current = false;
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
     document.body.classList.remove('resizing');
-    
-    // Remove the overlay
-    if (document.body.contains(overlay)) {
-      document.body.removeChild(overlay);
-    }
     
     // Clean up animation frame if still pending
     if (rafId.current !== null) {
@@ -164,6 +144,7 @@ const ResizablePanel: React.FC<ResizablePanelProps> = ({
     
     // Remove event listeners
     document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', handleMouseUp);
     
     // Call onResizeEnd callback if provided
     if (onResizeEnd) onResizeEnd();
@@ -188,7 +169,7 @@ const ResizablePanel: React.FC<ResizablePanelProps> = ({
       ? { width: `${size}px`, height: '100%' } 
       : { width: '100%', height: `${size}px` }),
     // Remove transition during active resize to prevent jitter
-    transition: 'width 0.1s ease, height 0.1s ease',
+    transition: isResizing.current ? 'none' : 'width 0.1s ease, height 0.1s ease',
     // Add will-change property for GPU acceleration
     willChange: 'width, height',
     // Add other GPU acceleration properties

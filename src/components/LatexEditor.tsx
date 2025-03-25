@@ -2439,32 +2439,24 @@ const EnhancedLatexEditor: React.FC<EnhancedLatexEditorProps> = ({ projectId, us
 
         {/* Chat Panel - integrated with smooth resizing */}
         {isChatOpen && (
-          <div
-            className="h-full flex-shrink-0 shadow-lg bg-[#1e1e1e]"
-            style={{
-              width: '350px',
-              contain: 'strict', // Add containment for better performance isolation
-              willChange: 'width', // Signal to browser to optimize this element
-            }}
-          >
-            <ChatPanel
-              isOpen={isChatOpen}
-              onClose={closeChat}
-              projectId={projectId}
-              userId={userId}
-              currentFileName={currentFileName}
-              currentFileId={currentFileId}
-              currentFileContent={code}
-              projectFiles={chatFileList}
-              onSuggestionApply={handleApplySuggestion}
-              onSuggestionReject={() => setActiveSuggestion(null)}
-              onFileSelect={handleFileSelect}
-              onFileUpload={handleChatFileUpload}
-              initialWidth={350}
-              minWidth={280}
-              maxWidth={600}
-            />
-          </div>
+          <ChatPanel
+            isOpen={isChatOpen}
+            onClose={closeChat}
+            projectId={projectId}
+            userId={userId}
+            currentFileName={currentFileName}
+            currentFileId={currentFileId}
+            currentFileContent={code}
+            projectFiles={chatFileList}
+            onSuggestionApply={handleApplySuggestion}
+            onSuggestionReject={() => setActiveSuggestion(null)}
+            onFileSelect={handleFileSelect}
+            onFileUpload={handleChatFileUpload}
+            initialWidth={350}
+            minWidth={280}
+            maxWidth={600}
+            className="z-10" // Add z-index to ensure chat stays on top
+          />
         )}
       </div>
 

@@ -195,48 +195,52 @@ body.resizing .resize-handle {
   pointer-events: auto !important;
 }
 
+/* Disable transitions during resize to prevent jitter */
 body.resizing .panel-transition {
   transition: none !important;
 }
 
-body.resizing .cm-editor * {
-  will-change: transform;
-  transition: none !important;
-}
-
+/* Optimize resize handles with GPU acceleration */
 .resize-handle {
   touch-action: none;
   will-change: transform;
+  transition: background-color 0.2s ease;
 }
 
+/* Apply GPU acceleration to panels */
 .panel-transition {
   transition: width 0.1s ease, height 0.1s ease;
-}
-
-/* Force hardware acceleration on panels during resize */
-.resizing {
-  will-change: transform, width, height;
-}
-
-/* Optimize chat window rendering */
-.chat-window-container {
-  transform: translateZ(0); /* Force hardware acceleration */
+  will-change: width, height;
+  transform: translateZ(0);
   backface-visibility: hidden;
   perspective: 1000px;
 }
 
-/* Improve chat message rendering performance */
+/* Apply GPU acceleration to the chat window container */
+.chat-window-container {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+  contain: layout size style;
+}
+
+/* Apply containment to message containers for better performance */
 .message-container {
-  contain: content; /* Improve rendering performance */
+  contain: content;
 }
 
-/* Improve scrolling performance */
-.overflow-auto {
-  -webkit-overflow-scrolling: touch;
-  scroll-behavior: smooth;
-}
-
-/* Optimize file tree rendering */
-.file-tree-item {
+/* Apply containment to CodeMirror for better performance */
+.cm-editor {
   contain: layout style;
+  will-change: transform;
+}
+
+/* Hide resize overlay when not needed */
+.resizing-overlay {
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.resizing .resizing-overlay {
+  opacity: 1;
 }
