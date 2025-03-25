@@ -1,8 +1,8 @@
-// components/FixedFileUploader.tsx
+// Enhanced FixedFileUploader.tsx with better Firebase Storage handling
 import React, { useState, useRef, useCallback } from 'react';
 import { Upload, X, Check, AlertCircle, FileText, Image, File, Loader } from 'lucide-react';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL, UploadTask } from 'firebase/storage';
 import { db, storage } from '@/lib/firebase';
 import { getAuth } from 'firebase/auth';
 
@@ -28,6 +28,7 @@ const FixedFileUploader: React.FC<FileUploaderProps> = ({
   const [uploadSuccessCount, setUploadSuccessCount] = useState<number>(0);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadTasksRef = useRef<{[key: string]: UploadTask}>({});
   const auth = getAuth();
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
@@ -108,7 +109,7 @@ const FixedFileUploader: React.FC<FileUploaderProps> = ({
     }
   };
 
-  // Fix for CORS issues: Store binary files directly in Firestore instead of Storage
+  // Enhanced upload function for Firebase Storage
   const uploadFiles = async () => {
     if (selectedFiles.length === 0) return;
     
@@ -133,7 +134,12 @@ const FixedFileUploader: React.FC<FileUploaderProps> = ({
             setUploadProgress(prev => ({ ...prev, [file.name]: 30 }));
             const content = await readFileAsText(file);
             
-            setUploadProgress(prev => ({ ...prev, [file.name]: 70 }));
+            setUploadProgress(prev => ({ ...prev, [file.name]: 60 }));
+            
+            // Create a unique filename to avoid collisions
+            const timestamp = Date.now();
+            const safeFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+            const uniqueFileName = `${timestamp}_${safeFileName}`;
             
             // Add file directly to Firestore
             await addDoc(collection(db, "projectFiles"), {
@@ -150,13 +156,15 @@ const FixedFileUploader: React.FC<FileUploaderProps> = ({
             });
             
             console.log(`Added text file to Firestore: ${file.name}`);
+            setUploadProgress(prev => ({ ...prev, [file.name]: 100 }));
+            successCount++;
           } 
-          else if (file.type.startsWith('image/')) {
-            // For image files, convert to data URL and store directly in Firestore
+          else if (file.type.startsWith('image/') && file.size < 1000000) {
+            // For small images (< 1MB), convert to data URL and store directly in Firestore
             setUploadProgress(prev => ({ ...prev, [file.name]: 30 }));
             
             const dataUrl = await readFileAsDataURL(file);
-            setUploadProgress(prev => ({ ...prev, [file.name]: 70 }));
+            setUploadProgress(prev => ({ ...prev, [file.name]: 60 }));
             
             // Add the image data directly to Firestore
             await addDoc(collection(db, "projectFiles"), {
@@ -173,43 +181,86 @@ const FixedFileUploader: React.FC<FileUploaderProps> = ({
             });
             
             console.log(`Added image as data URL to Firestore: ${file.name}`);
+            setUploadProgress(prev => ({ ...prev, [file.name]: 100 }));
+            successCount++;
           }
           else {
-            // For other binary files
+            // For larger images and other binary files, use Firebase Storage with progress tracking
+            setUploadProgress(prev => ({ ...prev, [file.name]: 10 }));
+            
             try {
+              // Create a unique filename to avoid collisions
+              const timestamp = Date.now();
+              const safeFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+              const uniqueFileName = `${timestamp}_${safeFileName}`;
+              
+              // Reference to the file location in Firebase Storage
+              const storageRef = ref(storage, `projects/${projectId}/files/${uniqueFileName}`);
+              
+              // Create and start the upload task with progress monitoring
+              const uploadTask = uploadBytes(storageRef, file);
+              uploadTasksRef.current[file.name] = uploadTask as any;
+              
+              // Upload the file and wait for completion
               setUploadProgress(prev => ({ ...prev, [file.name]: 30 }));
+              const snapshot = await uploadTask;
               
-              // Try to store directly in Firestore if small enough
-              if (file.size < 1000000) { // Less than ~1MB
-                const dataUrl = await readFileAsDataURL(file);
-                await addDoc(collection(db, "projectFiles"), {
-                  _name_: file.name,
-                  type: 'file',
-                  fileType: 'binary',
-                  size: file.size,
-                  content: dataUrl,
-                  projectId: projectId,
-                  parentId: parentId,
-                  ownerId: userId,
-                  createdAt: serverTimestamp(),
-                  lastModified: serverTimestamp()
-                });
-                console.log(`Added binary file as data URL to Firestore: ${file.name}`);
+              setUploadProgress(prev => ({ ...prev, [file.name]: 80 }));
+              
+              // Get the download URL
+              const downloadURL = await getDownloadURL(snapshot.ref);
+              
+              // Add file metadata to Firestore
+              await addDoc(collection(db, "projectFiles"), {
+                _name_: file.name,
+                type: 'file',
+                fileType: file.type.startsWith('image/') ? 'image' : 'binary',
+                size: file.size,
+                projectId: projectId,
+                parentId: parentId,
+                ownerId: userId,
+                downloadURL: downloadURL,
+                createdAt: serverTimestamp(),
+                lastModified: serverTimestamp()
+              });
+              
+              console.log(`Uploaded file to Storage and added metadata: ${file.name}`);
+              setUploadProgress(prev => ({ ...prev, [file.name]: 100 }));
+              successCount++;
+            } catch (storageError: any) {
+              console.error(`Error uploading to Firebase Storage: ${file.name}`, storageError);
+              
+              // If it's a small binary file, try to store directly in Firestore as fallback
+              if (file.size < 500000) { // Less than 500KB
+                console.log(`Trying to store small binary file directly in Firestore: ${file.name}`);
+                try {
+                  const dataUrl = await readFileAsDataURL(file);
+                  await addDoc(collection(db, "projectFiles"), {
+                    _name_: file.name,
+                    type: 'file',
+                    fileType: 'binary',
+                    size: file.size,
+                    content: dataUrl,
+                    projectId: projectId,
+                    parentId: parentId,
+                    ownerId: userId,
+                    createdAt: serverTimestamp(),
+                    lastModified: serverTimestamp()
+                  });
+                  console.log(`Added small binary file as data URL to Firestore: ${file.name}`);
+                  setUploadProgress(prev => ({ ...prev, [file.name]: 100 }));
+                  successCount++;
+                } catch (firestoreError) {
+                  console.error(`Error adding to Firestore: ${file.name}`, firestoreError);
+                  setUploadProgress(prev => ({ ...prev, [file.name]: -1 }));
+                  throw firestoreError;
+                }
               } else {
-                throw new Error("File too large for direct Firestore storage");
+                setUploadProgress(prev => ({ ...prev, [file.name]: -1 }));
+                throw storageError;
               }
-              
-              setUploadProgress(prev => ({ ...prev, [file.name]: 70 }));
-            } catch (error) {
-              console.error(`Error handling binary file directly: ${error}`);
-              setUploadProgress(prev => ({ ...prev, [file.name]: -1 }));
-              throw error;
             }
           }
-          
-          // Mark upload as complete
-          setUploadProgress(prev => ({ ...prev, [file.name]: 100 }));
-          successCount++;
         } catch (error) {
           console.error(`Error uploading ${file.name}:`, error);
           setUploadProgress(prev => ({ ...prev, [file.name]: -1 })); // -1 indicates error
@@ -236,6 +287,20 @@ const FixedFileUploader: React.FC<FileUploaderProps> = ({
   };
 
   const clearSelectedFiles = () => {
+    // Cancel any ongoing uploads
+    Object.entries(uploadTasksRef.current).forEach(([fileName, task]) => {
+      if (task && typeof task.cancel === 'function') {
+        try {
+          task.cancel();
+          console.log(`Cancelled upload for: ${fileName}`);
+        } catch (e) {
+          console.error(`Error cancelling upload for ${fileName}:`, e);
+        }
+      }
+    });
+    
+    // Clear state
+    uploadTasksRef.current = {};
     setSelectedFiles([]);
     setUploadProgress({});
     setUploadError(null);
@@ -248,7 +313,26 @@ const FixedFileUploader: React.FC<FileUploaderProps> = ({
   };
 
   const cancelFileSelection = (fileToRemove: File) => {
+    // Cancel upload for this file if it's in progress
+    if (uploadTasksRef.current[fileToRemove.name] && 
+        typeof uploadTasksRef.current[fileToRemove.name].cancel === 'function') {
+      try {
+        uploadTasksRef.current[fileToRemove.name].cancel();
+        delete uploadTasksRef.current[fileToRemove.name];
+      } catch (e) {
+        console.error(`Error cancelling upload for ${fileToRemove.name}:`, e);
+      }
+    }
+    
+    // Remove from selected files
     setSelectedFiles(prevFiles => prevFiles.filter(file => file !== fileToRemove));
+    
+    // Remove from progress tracking
+    setUploadProgress(prev => {
+      const newProgress = { ...prev };
+      delete newProgress[fileToRemove.name];
+      return newProgress;
+    });
   };
 
   return (

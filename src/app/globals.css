@@ -185,3 +185,58 @@ body::before {
 /* 
   Then update your CodeMirror component in LatexEditor.tsx by wrapping it in a div with the editor-container class:
 */
+
+
+body.resizing * {
+  pointer-events: none !important;
+}
+
+body.resizing .resize-handle {
+  pointer-events: auto !important;
+}
+
+body.resizing .panel-transition {
+  transition: none !important;
+}
+
+body.resizing .cm-editor * {
+  will-change: transform;
+  transition: none !important;
+}
+
+.resize-handle {
+  touch-action: none;
+  will-change: transform;
+}
+
+.panel-transition {
+  transition: width 0.1s ease, height 0.1s ease;
+}
+
+/* Force hardware acceleration on panels during resize */
+.resizing {
+  will-change: transform, width, height;
+}
+
+/* Optimize chat window rendering */
+.chat-window-container {
+  transform: translateZ(0); /* Force hardware acceleration */
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* Improve chat message rendering performance */
+.message-container {
+  contain: content; /* Improve rendering performance */
+}
+
+/* Improve scrolling performance */
+.overflow-auto {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* Optimize file tree rendering */
+.file-tree-item {
+  contain: layout style;
+}

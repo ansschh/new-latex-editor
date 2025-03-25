@@ -1,10 +1,11 @@
+// components/PdfViewer.tsx
 "use client";
 
 import React, { useEffect, useState, useRef } from 'react';
 import {
   Loader, Download, ZoomIn, ZoomOut, RotateCw,
   ChevronLeft, ChevronRight, Maximize, Minimize,
-  RefreshCw, Search, X, Printer, MoreVertical
+  RefreshCw, Search, X, Printer
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
@@ -21,6 +22,7 @@ interface EnhancedPdfViewerProps {
   htmlPreview?: string;
   documentTitle?: string;
   onRecompileRequest?: () => void;
+  hideToolbar?: boolean;
 }
 
 const EnhancedPdfViewer: React.FC<EnhancedPdfViewerProps> = ({
@@ -29,7 +31,8 @@ const EnhancedPdfViewer: React.FC<EnhancedPdfViewerProps> = ({
   error,
   htmlPreview,
   documentTitle = 'document',
-  onRecompileRequest
+  onRecompileRequest,
+  hideToolbar = false
 }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -47,8 +50,6 @@ const EnhancedPdfViewer: React.FC<EnhancedPdfViewerProps> = ({
 
   // Process PDF data when it changes
   useEffect(() => {
-    console.log("Processing PDF data, type:", typeof pdfData);
-
     // Reset states on new data
     setIframeError(false);
     setShowDownloadPrompt(false);
@@ -66,8 +67,6 @@ const EnhancedPdfViewer: React.FC<EnhancedPdfViewerProps> = ({
     try {
       // Handle string PDF data
       if (typeof pdfData === 'string') {
-        console.log("PDF string starts with:", pdfData.substring(0, 50));
-
         // Try to parse as JSON
         try {
           const jsonData = JSON.parse(pdfData);
@@ -365,18 +364,20 @@ const EnhancedPdfViewer: React.FC<EnhancedPdfViewerProps> = ({
   if (htmlPreview) {
     return (
       <div className="h-full flex flex-col bg-gray-900">
-        <div className="bg-gray-800 p-2 flex justify-between items-center border-b border-gray-700">
-          <div className="text-gray-300 font-medium">KaTeX Preview</div>
-          <div className="flex items-center">
-            <button
-              onClick={handleDownloadPdf}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded flex items-center"
-            >
-              <Download className="h-4 w-4 mr-1" />
-              Download PDF
-            </button>
+        {!hideToolbar && (
+          <div className="bg-gray-800 p-2 flex justify-between items-center border-b border-gray-700">
+            <div className="text-gray-300 font-medium">KaTeX Preview</div>
+            <div className="flex items-center">
+              <button
+                onClick={handleDownloadPdf}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded flex items-center"
+              >
+                <Download className="h-4 w-4 mr-1" />
+                Download PDF
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="flex-1 overflow-auto p-4">
           <div className="mx-auto">
@@ -426,126 +427,6 @@ const EnhancedPdfViewer: React.FC<EnhancedPdfViewerProps> = ({
       ref={containerRef}
       className="h-full bg-gray-900 relative flex flex-col"
     >
-      {/* Top toolbar */}
-      <div className="bg-gray-800 text-gray-300 px-3 py-2 flex items-center justify-between shadow-md z-10 border-b border-gray-700">
-        <div className="flex items-center space-x-1">
-          {/* Document title */}
-          <span className="font-medium truncate max-w-[200px]">
-            {documentTitle || 'Document'}.pdf
-          </span>
-        </div>
-
-        <div className="flex items-center space-x-1">
-          {/* Page navigation */}
-          <div className="flex items-center border-l border-r border-gray-700 px-2 mx-1">
-            <button
-              onClick={() => changePage('prev')}
-              disabled={currentPage <= 1}
-              className={`p-1 rounded ${currentPage <= 1 ? 'text-gray-600' : 'hover:bg-gray-700'}`}
-              title="Previous page"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-
-            <span className="text-xs mx-2">
-              Page {currentPage} of {totalPages}
-            </span>
-
-            <button
-              onClick={() => changePage('next')}
-              disabled={currentPage >= totalPages}
-              className={`p-1 rounded ${currentPage >= totalPages ? 'text-gray-600' : 'hover:bg-gray-700'}`}
-              title="Next page"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
-
-          {/* Zoom controls */}
-          <div className="flex items-center">
-            <button
-              onClick={() => handleZoom('out')}
-              disabled={zoom <= 50}
-              className={`p-1 rounded ${zoom <= 50 ? 'text-gray-600' : 'hover:bg-gray-700'}`}
-              title="Zoom out"
-            >
-              <ZoomOut className="h-4 w-4" />
-            </button>
-
-            <span className="text-xs mx-1">{zoom}%</span>
-
-            <button
-              onClick={() => handleZoom('in')}
-              disabled={zoom >= 300}
-              className={`p-1 rounded ${zoom >= 300 ? 'text-gray-600' : 'hover:bg-gray-700'}`}
-              title="Zoom in"
-            >
-              <ZoomIn className="h-4 w-4" />
-            </button>
-          </div>
-
-          {/* Rotate button */}
-          <button
-            onClick={handleRotate}
-            className="p-1 rounded hover:bg-gray-700"
-            title="Rotate"
-          >
-            <RotateCw className="h-4 w-4" />
-          </button>
-
-          {/* Search button */}
-          <button
-            onClick={() => setIsSearchOpen(!isSearchOpen)}
-            className={`p-1 rounded ${isSearchOpen ? 'bg-gray-700' : 'hover:bg-gray-700'}`}
-            title="Search in document"
-          >
-            <Search className="h-4 w-4" />
-          </button>
-
-          {/* Print button */}
-          <button
-            onClick={() => {
-              if (iframeRef.current) {
-                iframeRef.current.contentWindow?.print();
-              }
-            }}
-            className="p-1 rounded hover:bg-gray-700"
-            title="Print"
-          >
-            <Printer className="h-4 w-4" />
-          </button>
-
-          {/* Download button */}
-          <button
-            onClick={handleDownloadPdf}
-            className="p-1 rounded hover:bg-gray-700"
-            title="Download PDF"
-          >
-            <Download className="h-4 w-4" />
-          </button>
-
-          {/* Fullscreen toggle */}
-          <button
-            onClick={toggleFullscreen}
-            className="p-1 rounded hover:bg-gray-700"
-            title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-          >
-            {isFullscreen ? (
-              <Minimize className="h-4 w-4" />
-            ) : (
-              <Maximize className="h-4 w-4" />
-            )}
-          </button>
-
-          {/* More options */}
-          <button
-            className="p-1 rounded hover:bg-gray-700"
-            title="More options"
-          >
-            <MoreVertical className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
 
       {/* Search bar (conditionally rendered) */}
       {isSearchOpen && (
