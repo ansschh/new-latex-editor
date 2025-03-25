@@ -137,6 +137,32 @@ const RESIZE_STYLES = `
   
   .message-container {
     contain: content;
+    max-width: 100%;
+  }
+
+  .messages-container {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(113, 128, 150, 0.4) rgba(26, 32, 44, 0.1);
+    scroll-behavior: smooth;
+    overflow-anchor: auto;
+  }
+
+  .messages-container::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .messages-container::-webkit-scrollbar-track {
+    background: rgba(26, 32, 44, 0.1);
+    border-radius: 3px;
+  }
+
+  .messages-container::-webkit-scrollbar-thumb {
+    background: rgba(113, 128, 150, 0.4);
+    border-radius: 3px;
+  }
+
+  .messages-container::-webkit-scrollbar-thumb:hover {
+    background: rgba(113, 128, 150, 0.6);
   }
 `;
 
@@ -1131,8 +1157,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                         key={session.id}
                         onClick={() => selectChatSession(session.id)}
                         className={`w-full text-left px-3 py-2 text-sm flex items-center ${activeSessionId === session.id
-                            ? 'bg-[#04395e] text-white'
-                            : 'text-gray-300 hover:bg-[#2a2d2e]'
+                          ? 'bg-[#04395e] text-white'
+                          : 'text-gray-300 hover:bg-[#2a2d2e]'
                           }`}
                       >
                         <span className="truncate">{session.title || 'New Chat'}</span>
@@ -1161,20 +1187,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
         {/* Chat Content Area with drop zone */}
         {!loading && (
-          <div
-            className={`flex-1 relative overflow-hidden ${dragActive ? 'bg-blue-900/20' : ''}`}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          >
+  <div 
+    className="flex-1 relative flex flex-col overflow-hidden" // Added flex flex-col here
+    onDragOver={handleDragOver}
+    onDragLeave={handleDragLeave}
+    onDrop={handleDrop}
+  >
             {/* Drop indicator overlay */}
             {dragActive && (
-              <div className="absolute inset-0 flex items-center justify-center bg-blue-900/20 z-10">
-                <div className="bg-gray-800 rounded-lg p-4 shadow-lg">
-                  <p className="text-center text-white">Drop file to attach to your message</p>
-                </div>
-              </div>
-            )}
+      <div className="absolute inset-0 flex items-center justify-center bg-blue-900/20 z-10">
+        <div className="bg-gray-800 rounded-lg p-4 shadow-lg">
+          <p className="text-center text-white">Drop file to attach to your message</p>
+        </div>
+      </div>
+    )}
 
             {/* Empty State (when no messages) */}
             {messages.length === 0 && (
@@ -1209,7 +1235,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
             {/* Messages (when there are messages) */}
             {messages.length > 0 && (
-              <div className="flex-1 overflow-y-auto p-3 space-y-6">
+              <div className="flex-1 overflow-y-auto p-3 space-y-4 mb-0">
                 {messages.map((msg) => (
                   <div key={msg.id} className="flex flex-col message-container">
                     {/* Sender Badge */}
@@ -1322,7 +1348,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                     <div className="w-full h-1 bg-gray-700 rounded-full overflow-hidden">
                       <div
                         className={`h-full ${progress < 0 ? 'bg-red-500' :
-                            progress === 100 ? 'bg-green-500' : 'bg-blue-500'
+                          progress === 100 ? 'bg-green-500' : 'bg-blue-500'
                           }`}
                         style={{ width: `${progress < 0 ? 100 : progress}%` }}
                       ></div>
@@ -1437,8 +1463,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                                 type="button"
                                 onClick={() => updateSelectedModel(model)}
                                 className={`w-full text-left px-3 py-2 text-xs flex justify-between items-center ${(activeSession?.currentModel.id || AVAILABLE_MODELS[0].id) === model.id
-                                    ? 'bg-[#04395e] text-white'
-                                    : 'text-gray-300 hover:bg-[#2a2d2e]'
+                                  ? 'bg-[#04395e] text-white'
+                                  : 'text-gray-300 hover:bg-[#2a2d2e]'
                                   }`}
                               >
                                 <span>{model.name}</span>
@@ -1454,8 +1480,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                       type="submit"
                       disabled={(!newMessage.trim() && attachedFiles.length === 0) || !activeSessionId}
                       className={`p-1 ${(!newMessage.trim() && attachedFiles.length === 0) || !activeSessionId
-                          ? 'text-gray-500 cursor-not-allowed'
-                          : 'text-gray-300 hover:text-white'
+                        ? 'text-gray-500 cursor-not-allowed'
+                        : 'text-gray-300 hover:text-white'
                         }`}
                     >
                       <Send className="h-5 w-5" />
